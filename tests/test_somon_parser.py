@@ -1,3 +1,4 @@
+import re
 import pytest
 from app.services.somon_parser import (
     parse_somon_salary,
@@ -38,17 +39,20 @@ def test_detect_somon_category():
 @pytest.mark.asyncio
 async def test_somon_parser_service_mock(db_session, httpx_mock):
     httpx_mock.add_response(
-        url="https://somon.tj/vakansii/dushanbe/",
+        url=re.compile(r"https://somon\.tj/vakansii/.*"),
+        is_reusable=True,
         text="""
         <html>
             <body>
                 <a href="/adv/99988877_test_job_somon/">Тестовая Вакансия Somon</a>
+                <a href="/vakansii/?page=1">1</a>
             </body>
         </html>
         """
     )
     httpx_mock.add_response(
         url="https://somon.tj/adv/99988877_test_job_somon/",
+        is_reusable=True,
         text="""
         <html>
             <body>
@@ -62,7 +66,7 @@ async def test_somon_parser_service_mock(db_session, httpx_mock):
     )
 
     parser = SomonParserService(db_session)
-    stats = await parser.fetch_and_sync(max_pages=1, delay_seconds=0.0)
+    stats = await parser.fetch_and_sync(max_pages=1, delay_seconds=0.0, full_import=False)
 
     assert stats["total_fetched"] == 1
     assert stats["created"] == 1
@@ -71,17 +75,20 @@ async def test_somon_parser_service_mock(db_session, httpx_mock):
 @pytest.mark.asyncio
 async def test_sync_somon_jobs_api_endpoint(client, httpx_mock):
     httpx_mock.add_response(
-        url="https://somon.tj/vakansii/dushanbe/",
+        url=re.compile(r"https://somon\.tj/vakansii/.*"),
+        is_reusable=True,
         text="""
         <html>
             <body>
                 <a href="/adv/11223344_buhgalter_somon/">Бухгалтер Somon</a>
+                <a href="/vakansii/?page=1">1</a>
             </body>
         </html>
         """
     )
     httpx_mock.add_response(
         url="https://somon.tj/adv/11223344_buhgalter_somon/",
+        is_reusable=True,
         text="""
         <html>
             <body>
@@ -94,7 +101,7 @@ async def test_sync_somon_jobs_api_endpoint(client, httpx_mock):
         """
     )
 
-    res = await client.post("/api/v1/jobs/sync/somon?max_pages=1")
+    res = await client.post("/api/v1/jobs/sync/somon?max_pages=1&full_import=false")
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "success"

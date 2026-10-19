@@ -66,9 +66,11 @@ export const Navbar: React.FC<NavbarProps> = ({
     };
 
     window.addEventListener('ergon_profile_updated', handleProfileChange);
+    window.addEventListener('ergon_user_updated', handleProfileChange);
     window.addEventListener('storage', handleProfileChange);
     return () => {
       window.removeEventListener('ergon_profile_updated', handleProfileChange);
+      window.removeEventListener('ergon_user_updated', handleProfileChange);
       window.removeEventListener('storage', handleProfileChange);
     };
   }, [user]);
@@ -165,16 +167,16 @@ export const Navbar: React.FC<NavbarProps> = ({
     <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-50 shadow-xs transition-colors duration-200">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
         
-        {/* 1. Clean Brand Logo (Enlarged transparent PNG without expanding header) */}
+        {/* 1. Clean Brand Logo */}
         <div 
           onClick={() => setActiveTab('home')}
           className="flex items-center gap-2 cursor-pointer select-none group shrink-0"
         >
-          <div className="h-16 flex items-center group-hover:scale-105 transition-transform overflow-visible">
+          <div className="h-14 sm:h-16 flex items-center group-hover:scale-105 transition-transform overflow-visible">
             <img 
               src={resolvedTheme === 'dark' ? '/logo-dark.png' : '/logo-light.png'} 
               alt="HamKor Logo" 
-              className="h-14 sm:h-16 w-auto object-contain max-h-16 scale-125 sm:scale-135 origin-left drop-shadow-sm" 
+              className="h-10 sm:h-14 md:h-16 w-auto object-contain max-h-16 scale-100 sm:scale-125 origin-left drop-shadow-sm" 
               onError={(e) => {
                 (e.target as HTMLImageElement).src = '/logo.png';
               }}
@@ -182,17 +184,13 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
 
-
-
-
-
         {/* Right Section: Language Switcher, Theme Switcher, Notifications, Post Job & User Auth */}
-        <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
 
-          {/* Favorites Header Button */}
+          {/* Favorites Header Button (Desktop view, since Bottom Nav has Favorites on mobile) */}
           <button
             onClick={() => setActiveTab('favorites')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-extrabold transition-all shadow-2xs ${
+            className={`hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-extrabold transition-all shadow-2xs ${
               activeTab === 'favorites'
                 ? 'bg-indigo-600 text-white border-indigo-600'
                 : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200'
@@ -200,7 +198,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             title="Избранное"
           >
             <Heart className={`w-3.5 h-3.5 ${activeTab === 'favorites' ? 'text-white fill-white' : 'text-indigo-600 dark:text-indigo-400'}`} />
-            <span className="hidden sm:inline">{t('nav.favorites')}</span>
+            <span>{t('nav.favorites')}</span>
           </button>
 
           {/* Real-time Notification Bell Dropdown (for Logged In Users) */}

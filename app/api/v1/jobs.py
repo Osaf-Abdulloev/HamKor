@@ -26,14 +26,16 @@ async def create_job(
 @router.get("", response_model=PaginatedResponse[JobOut])
 async def search_jobs(
     title: Optional[str] = None,
+    search: Optional[str] = None,
     category: Optional[str] = None,
     location: Optional[str] = None,
     employment_type: Optional[EmploymentType] = None,
     salary_min: Optional[float] = None,
     salary_max: Optional[float] = None,
+    source: Optional[str] = None,
     status: Optional[JobStatus] = JobStatus.OPEN,
     company_id: Optional[uuid.UUID] = None,
-    sort_by_match: bool = Query(default=True),
+    sort_by_match: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=20, ge=1, le=1000),
     current_user: Optional[User] = Depends(get_current_user_optional),
@@ -53,50 +55,107 @@ async def search_jobs(
         worker_profile = await wp_repo.get_by_user_id(current_user.id)
         published_resume = await res_repo.get_user_published_resume(current_user.id)
 
-    # Fetch matching jobs from repo (fetch extra if sorting by match across whole catalog)
-    fetch_limit = limit * 5 if (sort_by_match and current_user) else limit
+    # Fetch matching jobs from repo (with automatic user_id outer join sorting for logged-in workers)
+    user_id_param = current_user.id if current_user else None
     items, total = await service.search_jobs(
         title=title,
+        search=search,
         category=category,
         location=location,
         employment_type=employment_type,
         salary_min=salary_min,
         salary_max=salary_max,
+        source=source,
         status=status,
         company_id=company_id,
-        skip=0 if sort_by_match else skip,
-        limit=fetch_limit if sort_by_match else limit
+        user_id=user_id_param,
+        skip=skip,
+        limit=limit
     )
 
-    # Fetch user's submitted application job IDs if authenticated
+    # Fetch user's submitted application & saved job IDs if authenticated
     applied_job_ids = set()
+    saved_job_ids = set()
+    job_match_map = {}
     if current_user:
-        from app.models.domain import Application
+        from app.models.domain import Application, JobMatch, SavedJob, Favorite
+        from app.models.enums import FavoriteTargetType
+        
         app_res = await db.execute(
             select(Application.job_id).where(Application.worker_id == current_user.id)
         )
         applied_job_ids = set(app_res.scalars().all())
 
-    # Compute real-time backend AI match score and travel logistics for each job
+        saved_res = await db.execute(
+            select(SavedJob.job_id).where(SavedJob.user_id == current_user.id)
+        )
+        saved_job_ids = set(saved_res.scalars().all())
+
+        fav_res = await db.execute(
+            select(Favorite.target_id).where(
+                Favorite.user_id == current_user.id,
+                Favorite.target_type == FavoriteTargetType.JOB
+            )
+        )
+        saved_job_ids.update(fav_res.scalars().all())
+
+        # Load persistent JobMatch records for returned jobs
+        item_ids = [j.id for j in items]
+        if item_ids:
+            jm_res = await db.execute(
+                select(JobMatch).where(
+                    JobMatch.user_id == current_user.id,
+                    JobMatch.job_id.in_(item_ids),
+                    JobMatch.is_stale == False
+                )
+            )
+            job_match_map = {m.job_id: m for m in jm_res.scalars().all()}
+
     from app.services.match_service import JobMatchService
     annotated_items = []
     for job in items:
-        eval_data = JobMatchService.evaluate_job_match(job, worker_profile, current_user, published_resume)
         job_dict = JobOut.model_validate(job).model_dump()
-        job_dict.update({
-            "match_score": eval_data["match_score"],
-            "commute_estimate": eval_data["commute_estimate"],
-            "distance_estimate": eval_data["distance_estimate"],
-            "matched_reasons": eval_data["matched_reasons"],
-            "matched_skills": eval_data["matched_skills"],
-            "has_applied": job.id in applied_job_ids,
-        })
+        jm = job_match_map.get(job.id)
+        is_job_saved = job.id in saved_job_ids
+
+        if jm:
+            job_dict.update({
+                "match_score": jm.match_score,
+                "commute_estimate": jm.commute_estimate,
+                "distance_estimate": jm.distance_estimate,
+                "matched_reasons": jm.matched_reasons or ["Подходит по параметрам вашего профиля"],
+                "matched_skills": jm.matched_skills or [],
+                "has_applied": job.id in applied_job_ids,
+                "is_saved": is_job_saved,
+                "is_favorite": is_job_saved,
+            })
+        elif current_user:
+            # Inline fallback for newly registered worker if background task hasn't completed
+            eval_data = JobMatchService.evaluate_job_match(job, worker_profile, current_user, published_resume)
+            job_dict.update({
+                "match_score": eval_data["match_score"],
+                "commute_estimate": eval_data["commute_estimate"],
+                "distance_estimate": eval_data["distance_estimate"],
+                "matched_reasons": eval_data["matched_reasons"],
+                "matched_skills": eval_data["matched_skills"],
+                "has_applied": job.id in applied_job_ids,
+                "is_saved": is_job_saved,
+                "is_favorite": is_job_saved,
+            })
+        else:
+            # Guest view
+            job_dict.update({
+                "match_score": 0,
+                "commute_estimate": None,
+                "distance_estimate": None,
+                "matched_reasons": [],
+                "matched_skills": [],
+                "has_applied": False,
+                "is_saved": False,
+                "is_favorite": False,
+            })
+
         annotated_items.append(job_dict)
-
-
-    if sort_by_match and current_user:
-        annotated_items.sort(key=lambda x: x.get("match_score", 0), reverse=True)
-        annotated_items = annotated_items[skip : skip + limit]
 
     pages = (total + limit - 1) // limit if total > 0 else 1
     return PaginatedResponse(items=annotated_items, total=total, page=page, limit=limit, pages=pages)
@@ -132,32 +191,78 @@ async def get_my_saved_jobs(
     jobs = res.scalars().all()
     total = len(jobs)
     paginated = jobs[(page - 1) * limit : page * limit]
+
+    app_res = await db.execute(
+        select(Application.job_id).where(Application.worker_id == current_user.id)
+    )
+    applied_job_ids = set(app_res.scalars().all())
+
+    from app.services.match_service import JobMatchService
+    annotated_items = []
+    for job in paginated:
+        job_dict = JobOut.model_validate(job).model_dump()
+        eval_data = JobMatchService.evaluate_job_match(job, None, current_user, None)
+        job_dict.update({
+            "match_score": eval_data["match_score"],
+            "commute_estimate": eval_data["commute_estimate"],
+            "distance_estimate": eval_data["distance_estimate"],
+            "matched_reasons": eval_data["matched_reasons"],
+            "matched_skills": eval_data["matched_skills"],
+            "has_applied": job.id in applied_job_ids,
+            "is_saved": True,
+            "is_favorite": True,
+        })
+        annotated_items.append(job_dict)
+
     pages = (total + limit - 1) // limit if total > 0 else 1
-    return PaginatedResponse(items=paginated, total=total, page=page, limit=limit, pages=pages)
+    return PaginatedResponse(items=annotated_items, total=total, page=page, limit=limit, pages=pages)
 
 @router.post("/{job_id}/save", response_model=MessageResponse)
+@router.post("/{job_id}/favorite", response_model=MessageResponse)
 async def save_job_to_bookmarks(
     job_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
+    from app.models.domain import Favorite
+    from app.models.enums import FavoriteTargetType
+
     stmt = select(SavedJob).where(SavedJob.user_id == current_user.id, SavedJob.job_id == job_id)
     res = await db.execute(stmt)
     existing = res.scalar_one_or_none()
     if not existing:
         saved_job = SavedJob(user_id=current_user.id, job_id=job_id)
         db.add(saved_job)
-        await db.commit()
+
+    fav_stmt = select(Favorite).where(
+        Favorite.user_id == current_user.id,
+        Favorite.target_type == FavoriteTargetType.JOB,
+        Favorite.target_id == job_id
+    )
+    fav_res = await db.execute(fav_stmt)
+    if not fav_res.scalar_one_or_none():
+        fav = Favorite(user_id=current_user.id, target_type=FavoriteTargetType.JOB, target_id=job_id)
+        db.add(fav)
+
+    await db.commit()
     return MessageResponse(message="Job saved to bookmarks in PostgreSQL")
 
 @router.delete("/{job_id}/save", response_model=MessageResponse)
+@router.delete("/{job_id}/favorite", response_model=MessageResponse)
 async def remove_job_from_bookmarks(
     job_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    stmt = delete(SavedJob).where(SavedJob.user_id == current_user.id, SavedJob.job_id == job_id)
-    await db.execute(stmt)
+    from app.models.domain import Favorite
+    from app.models.enums import FavoriteTargetType
+
+    await db.execute(delete(SavedJob).where(SavedJob.user_id == current_user.id, SavedJob.job_id == job_id))
+    await db.execute(delete(Favorite).where(
+        Favorite.user_id == current_user.id,
+        Favorite.target_type == FavoriteTargetType.JOB,
+        Favorite.target_id == job_id
+    ))
     await db.commit()
     return MessageResponse(message="Job removed from bookmarks in PostgreSQL")
 
@@ -251,11 +356,12 @@ async def delete_job(
 @router.post("/sync/yora")
 async def sync_yora_jobs(
     max_pages: Optional[int] = Query(default=None, ge=1, description="Max pages to fetch, default fetches all"),
+    full_import: bool = Query(default=True, description="Whether to perform full import with soft delete"),
     db: AsyncSession = Depends(get_db)
 ):
     from app.services.yora_parser import YoraParserService
     parser = YoraParserService(db)
-    stats = await parser.fetch_and_sync(max_pages=max_pages)
+    stats = await parser.fetch_and_sync(max_pages=max_pages, full_import=full_import)
     return {
         "status": "success",
         "source": "yora.tj",
@@ -264,15 +370,49 @@ async def sync_yora_jobs(
 
 @router.post("/sync/somon")
 async def sync_somon_jobs(
-    max_pages: int = Query(default=10, ge=1, le=100, description="Max pages to fetch from Somon.tj"),
+    max_pages: Optional[int] = Query(default=None, ge=1, description="Max pages to fetch from Somon.tj"),
+    full_import: bool = Query(default=True, description="Whether to perform full import with soft delete"),
     db: AsyncSession = Depends(get_db)
 ):
     from app.services.somon_parser import SomonParserService
     parser = SomonParserService(db)
-    stats = await parser.fetch_and_sync(max_pages=max_pages)
+    stats = await parser.fetch_and_sync(max_pages=max_pages, full_import=full_import)
     return {
         "status": "success",
         "source": "somon.tj",
         "stats": stats
     }
+
+@router.get("/sync/status")
+async def get_sync_status(
+    db: AsyncSession = Depends(get_db)
+):
+    from sqlalchemy import func
+    from app.models.domain import Job
+    from app.models.enums import JobStatus
+
+    total_res = await db.execute(select(func.count(Job.id)))
+    total_jobs = total_res.scalar_one()
+
+    yora_res = await db.execute(select(func.count(Job.id)).where(Job.external_source == "yora.tj"))
+    total_yora = yora_res.scalar_one()
+
+    somon_res = await db.execute(select(func.count(Job.id)).where(Job.external_source == "somon.tj"))
+    total_somon = somon_res.scalar_one()
+
+    active_res = await db.execute(select(func.count(Job.id)).where(Job.status == JobStatus.OPEN))
+    active_jobs = active_res.scalar_one()
+
+    last_seen_res = await db.execute(select(func.max(Job.last_seen_at)))
+    last_synced_at = last_seen_res.scalar_one_or_none()
+
+    return {
+        "total_jobs": total_jobs,
+        "yora_jobs": total_yora,
+        "somon_jobs": total_somon,
+        "active_jobs": active_jobs,
+        "inactive_jobs": total_jobs - active_jobs,
+        "last_synced_at": last_synced_at
+    }
+
 

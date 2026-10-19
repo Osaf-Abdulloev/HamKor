@@ -1,7 +1,8 @@
-import React from 'react';
-import { MapPin, Building2, Eye, ArrowUpRight } from 'lucide-react';
+import React, { useState } from 'react';
+import { MapPin, Building2, Eye, ArrowUpRight, Heart } from 'lucide-react';
 import { Job } from '../../types';
 import { openTelegramLink } from '../../utils/telegram';
+import { jobService } from '../../services/api';
 
 interface JobCardProps {
   job: Job;
@@ -9,9 +10,33 @@ interface JobCardProps {
 }
 
 export const JobCard: React.FC<JobCardProps> = ({ job, onSelectJob }) => {
+  if (!job) return null;
   const isExternal = job.is_external || !!job.external_source;
-  const companyName = job.external_company_name || (job as any).company?.company_name || 'Работодатель';
-  const logoUrl = job.external_company_logo || (job as any).company?.logo_url;
+  const companyName = job?.external_company_name || (job as any)?.company?.company_name || 'Работодатель';
+  const logoUrl = job?.external_company_logo || (job as any)?.company?.logo_url;
+
+  const [isSaved, setIsSaved] = useState<boolean>(job.is_saved || job.is_favorite || false);
+  const [isToggling, setIsToggling] = useState<boolean>(false);
+
+  const handleToggleFavorite = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isToggling) return;
+    setIsToggling(true);
+    const prevVal = isSaved;
+    setIsSaved(!prevVal);
+    try {
+      if (prevVal) {
+        await jobService.unsaveJob(job.id);
+      } else {
+        await jobService.saveJob(job.id);
+      }
+      window.dispatchEvent(new Event('ergon_favorites_updated'));
+    } catch (err) {
+      setIsSaved(prevVal);
+    } finally {
+      setIsToggling(false);
+    }
+  };
 
   const formatSalary = () => {
     if (job.salary_min && job.salary_max) {
@@ -59,6 +84,13 @@ export const JobCard: React.FC<JobCardProps> = ({ job, onSelectJob }) => {
         dot: 'bg-cyan-500'
       };
     }
+    if (src.includes('somon') || url.includes('somon')) {
+      return {
+        label: 'somon.tj',
+        bg: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+        dot: 'bg-amber-500'
+      };
+    }
     if (isExternal) {
       return {
         label: job.external_source || 'Внешняя',
@@ -76,6 +108,8 @@ export const JobCard: React.FC<JobCardProps> = ({ job, onSelectJob }) => {
   const empBadge = getEmploymentBadge();
   const srcBadge = getSourceBadge();
 
+  const [imgError, setImgError] = useState<boolean>(false);
+
   return (
     <div className="glass-card rounded-2xl p-5 hover:shadow-glass-hover transition-all duration-300 flex flex-col justify-between group hover:-translate-y-1 relative">
       
@@ -84,14 +118,12 @@ export const JobCard: React.FC<JobCardProps> = ({ job, onSelectJob }) => {
         <div className="flex items-start justify-between gap-3 mb-4">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200/60 dark:border-slate-700/60 flex items-center justify-center overflow-hidden shrink-0 shadow-sm">
-              {logoUrl ? (
+              {logoUrl && !imgError ? (
                 <img 
                   src={logoUrl} 
                   alt={companyName}
                   className="w-full h-full object-cover"
-                  onError={(e) => {
-                    (e.target as HTMLElement).style.display = 'none';
-                  }}
+                  onError={() => setImgError(true)}
                 />
               ) : (
                 <Building2 className="w-6 h-6 text-slate-400" />
@@ -109,11 +141,25 @@ export const JobCard: React.FC<JobCardProps> = ({ job, onSelectJob }) => {
           </div>
 
           {/* Source Tag & Favorite Button */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
             <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-full border shrink-0 ${srcBadge.bg}`}>
               <span className={`w-1.5 h-1.5 rounded-full ${srcBadge.dot} animate-pulse`}></span>
               {srcBadge.label}
             </span>
+
+            <button
+              type="button"
+              onClick={handleToggleFavorite}
+              disabled={isToggling}
+              title={isSaved ? "Удалить из избранного" : "Сохранить в избранное"}
+              className={`p-1.5 rounded-xl border transition-all active:scale-95 cursor-pointer shrink-0 ${
+                isSaved
+                  ? 'bg-rose-50 dark:bg-rose-950/60 text-rose-600 border-rose-200 dark:border-rose-800/60'
+                  : 'bg-slate-100 dark:bg-slate-800/80 text-slate-400 hover:text-rose-500 hover:bg-rose-50/50 border-slate-200/80 dark:border-slate-700/60'
+              }`}
+            >
+              <Heart className={`w-4 h-4 ${isSaved ? 'fill-rose-600 text-rose-600' : ''}`} />
+            </button>
           </div>
         </div>
 

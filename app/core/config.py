@@ -1,4 +1,6 @@
 import os
+import dotenv
+dotenv.load_dotenv()
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -55,7 +57,19 @@ class Settings(BaseSettings):
         return self.EMAILS_FROM_EMAIL or self.EMAIL_FROM or self.get_smtp_user
     
     TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_BOT_USERNAME: str = "HamKorJobsBot"
+    TELEGRAM_WEBHOOK_URL: str = ""
+    TELEGRAM_SECRET_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
+
+    @property
+    def get_telegram_bot_token(self) -> str:
+        token = self.TELEGRAM_BOT_TOKEN
+        if not token or len(token) < 10:
+            if self.TELEGRAM_SECRET_TOKEN and ":" in self.TELEGRAM_SECRET_TOKEN:
+                return self.TELEGRAM_SECRET_TOKEN
+            return self.TELEGRAM_SECRET_TOKEN or ""
+        return token
     
     FILE_STORAGE_PATH: str = "./uploads"
     MAX_UPLOAD_SIZE_MB: int = 10

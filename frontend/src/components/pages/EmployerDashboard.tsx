@@ -181,12 +181,14 @@ export const EmployerDashboard: React.FC<EmployerDashboardProps> = ({ onJobCreat
 
   const handleUpdateAppStatus = async (appId: string, newStatus: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'REVIEWED') => {
     setIncomingApplications((prev) =>
-      prev.map((a) => (a.id === appId ? { ...a, status: newStatus } : a))
+      prev.map((a) => (a.id === appId ? { ...a, status: newStatus.toLowerCase() as any } : a))
     );
     try {
-      await applicationService.updateStatus(appId, newStatus);
+      await applicationService.updateStatus(appId, newStatus.toLowerCase());
+      await loadEmployerData();
     } catch (e) {
       console.error('Error updating app status:', e);
+      await loadEmployerData();
     }
   };
 
@@ -516,6 +518,7 @@ export const EmployerDashboard: React.FC<EmployerDashboardProps> = ({ onJobCreat
                 const position = app.jobTitle || app.job_title || app.job?.title || 'Специалист';
                 const city = w.city || app.location || 'г. Душанбе';
                 const formattedDate = app.applied_at || (app.created_at ? new Date(app.created_at).toLocaleDateString('ru-RU') : '01.08.2026');
+                const appStatusUpper = (app.status || 'PENDING').toString().toUpperCase();
 
                 return (
                   <div
@@ -551,20 +554,25 @@ export const EmployerDashboard: React.FC<EmployerDashboardProps> = ({ onJobCreat
 
                       {/* Status Badge */}
                       <div className="flex items-center gap-2">
-                        {app.status === 'ACCEPTED' ? (
+                        {appStatusUpper === 'ACCEPTED' ? (
                           <span className="px-3.5 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 text-xs font-black flex items-center gap-1.5 shadow-2xs">
                             <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                             <span>Принят на собеседование</span>
                           </span>
-                        ) : app.status === 'REJECTED' ? (
+                        ) : appStatusUpper === 'REJECTED' ? (
                           <span className="px-3.5 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800/60 text-xs font-black flex items-center gap-1.5 shadow-2xs">
                             <XCircle className="w-4 h-4 text-rose-600 dark:text-rose-400" />
                             <span>Отклонен</span>
                           </span>
-                        ) : app.status === 'REVIEWED' ? (
+                        ) : appStatusUpper === 'REVIEWED' ? (
                           <span className="px-3.5 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60 text-xs font-black flex items-center gap-1.5 shadow-2xs">
                             <Clock className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                             <span>На рассмотрении</span>
+                          </span>
+                        ) : appStatusUpper === 'CANCELLED' ? (
+                          <span className="px-3.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700 text-xs font-black flex items-center gap-1.5 shadow-2xs">
+                            <XCircle className="w-4 h-4 text-slate-500" />
+                            <span>Отменено</span>
                           </span>
                         ) : (
                           <span className="px-3.5 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 text-xs font-black flex items-center gap-1.5 shadow-2xs">
@@ -592,36 +600,40 @@ export const EmployerDashboard: React.FC<EmployerDashboardProps> = ({ onJobCreat
                         <button
                           onClick={() => handleUpdateAppStatus(app.id, 'ACCEPTED')}
                           className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 shadow-2xs active:scale-95 ${
-                            app.status === 'ACCEPTED'
+                            appStatusUpper === 'ACCEPTED'
                               ? 'bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-400/40'
                               : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-600 hover:text-white'
                           }`}
                         >
                           <Check className="w-4 h-4" />
-                          <span>{app.status === 'ACCEPTED' ? 'Принято' : 'Принять отклик'}</span>
+                          <span>{appStatusUpper === 'ACCEPTED' ? 'Принято' : 'Принять отклик'}</span>
                         </button>
 
                         {/* Smooth Animated Reject Button */}
                         <div
                           className={`transition-all duration-500 ease-in-out transform origin-left ${
-                            app.status === 'ACCEPTED'
+                            appStatusUpper === 'ACCEPTED'
                               ? 'opacity-0 max-w-0 scale-90 overflow-hidden pointer-events-none p-0 border-0 shadow-none -ml-2'
                               : 'opacity-100 max-w-[140px] scale-100 ml-0'
                           }`}
                         >
                           <button
                             onClick={() => handleUpdateAppStatus(app.id, 'REJECTED')}
-                            className="px-4 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 hover:bg-rose-600 hover:text-white text-xs font-black transition-all flex items-center gap-1.5 whitespace-nowrap shadow-2xs active:scale-95"
+                            className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 whitespace-nowrap shadow-2xs active:scale-95 ${
+                              appStatusUpper === 'REJECTED'
+                                ? 'bg-rose-600 text-white shadow-sm ring-2 ring-rose-400/40'
+                                : 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 hover:bg-rose-600 hover:text-white'
+                            }`}
                           >
                             <X className="w-4 h-4" />
-                            <span>Отклонить</span>
+                            <span>{appStatusUpper === 'REJECTED' ? 'Отклонено' : 'Отклонить'}</span>
                           </button>
                         </div>
 
                         <div className="flex items-center gap-1.5 ml-1">
                           <span className="text-[11px] font-bold text-slate-400">Статус:</span>
                           <select
-                            value={app.status || 'PENDING'}
+                            value={appStatusUpper}
                             onChange={(e) => handleUpdateAppStatus(app.id, e.target.value as any)}
                             className="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 outline-none cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-800 transition-all"
                           >

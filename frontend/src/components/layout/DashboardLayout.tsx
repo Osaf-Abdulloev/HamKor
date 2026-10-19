@@ -81,10 +81,10 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
 
   const allNavItems = [
     { id: 'profile', label: user?.role === 'employer' ? t('nav.company_profile') : t('nav.my_profile'), icon: user?.role === 'employer' ? Building2 : UserIcon, protected: true },
-    ...(user?.role === 'employer' ? [{ id: 'my_jobs', label: 'Мои вакансии', icon: Briefcase, protected: true }] : []),
+    ...(user?.role === 'employer' ? [{ id: 'my_jobs', label: t('nav.my_jobs'), icon: Briefcase, protected: true }] : []),
     ...(user?.role !== 'employer' ? [{ id: 'resumes', label: t('nav.ai_resumes'), icon: Sparkles, protected: true }] : []),
     { id: 'jobs', label: user?.role === 'employer' ? t('nav.all_candidates') : t('nav.all_jobs'), icon: user?.role === 'employer' ? UserCheck : Search, protected: false },
-    { id: 'favorites', label: 'Избранное', icon: Heart, protected: false },
+    { id: 'favorites', label: t('nav.favorites'), icon: Heart, protected: false },
     { id: 'applications', label: t('nav.applications'), icon: FileText, protected: true },
     { id: 'chat', label: t('nav.messages'), icon: Mail, protected: true },
   ];
@@ -98,10 +98,10 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex flex-col md:flex-row gap-6 min-h-[calc(100vh-5rem)]">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 md:py-6 flex flex-col md:flex-row gap-6 min-h-[calc(100vh-5rem)] pb-[calc(5rem+env(safe-area-inset-bottom,0px))] md:pb-6">
       
-      {/* Left Sidebar */}
-      <aside className="w-full md:w-64 shrink-0 bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border border-slate-200/80 dark:border-slate-800 rounded-3xl p-4 flex flex-col justify-between h-auto md:h-[calc(100vh-7rem)] sticky top-20 shadow-xl shadow-indigo-500/5 transition-all">
+      {/* Left Sidebar (Desktop Only) */}
+      <aside className="hidden md:flex w-64 shrink-0 bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border border-slate-200/80 dark:border-slate-800 rounded-3xl p-4 flex-col justify-between h-[calc(100vh-7rem)] sticky top-20 shadow-xl shadow-indigo-500/5 transition-all">
         
         <div className="space-y-5">
           

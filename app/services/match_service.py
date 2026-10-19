@@ -1,5 +1,12 @@
+import uuid
 from typing import Optional, List, Dict, Any
-from app.models.domain import Job, WorkerProfile, User, Resume
+from datetime import datetime, timezone
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
+from sqlalchemy import delete, update
+from app.models.domain import Job, WorkerProfile, User, Resume, JobMatch
+from app.models.enums import JobStatus
 from app.services.location_service import LocationService
 
 class JobMatchService:
@@ -36,7 +43,7 @@ class JobMatchService:
             if not bio_text:
                 bio_text = published_resume.content.get("personal_info", {}).get("summary", "")
 
-        # A. Position Title Match (Max 40 pts)
+
         position_score = 15
         if pos_title and job.title:
             pos_words = set(pos_title.lower().split())
@@ -131,3 +138,198 @@ class JobMatchService:
             "missing_skills": missing_skills,
             "growth_advice": growth_advice
         }
+
+    @staticmethod
+    async def recalculate_user_matches(session: AsyncSession, user_id: uuid.UUID) -> int:
+        """
+        Recalculate persistent JobMatch records for a worker user against active open jobs.
+        """
+        # Fetch user
+        u_res = await session.execute(select(User).where(User.id == user_id))
+        user = u_res.scalar_one_or_none()
+        if not user:
+            return 0
+
+        # Fetch worker profile with skills
+        from app.models.domain import WorkerSkill
+        wp_res = await session.execute(
+            select(WorkerProfile)
+            .options(selectinload(WorkerProfile.worker_skills).selectinload(WorkerSkill.skill))
+            .where(WorkerProfile.user_id == user_id)
+        )
+        worker_profile = wp_res.scalar_one_or_none()
+
+        # Fetch published resume
+        from app.repositories.resume import ResumeRepository
+        res_repo = ResumeRepository(session)
+        published_resume = await res_repo.get_user_published_resume(user_id)
+
+        # Mark existing matches as stale
+        await session.execute(
+            update(JobMatch)
+            .where(JobMatch.user_id == user_id)
+            .values(is_stale=True)
+        )
+
+        # Fetch active open jobs
+        jobs_res = await session.execute(
+            select(Job).where(Job.status == JobStatus.OPEN).limit(500)
+        )
+        active_jobs = list(jobs_res.scalars().all())
+
+        if not active_jobs:
+            await session.commit()
+            return 0
+
+        # Fetch existing match objects for user to reuse IDs
+        existing_matches_res = await session.execute(
+            select(JobMatch).where(JobMatch.user_id == user_id)
+        )
+        match_map = {m.job_id: m for m in existing_matches_res.scalars().all()}
+
+        count = 0
+        now = datetime.now(timezone.utc)
+
+        for job in active_jobs:
+            eval_data = JobMatchService.evaluate_job_match(
+                job=job,
+                worker_profile=worker_profile,
+                user=user,
+                published_resume=published_resume
+            )
+
+            existing = match_map.get(job.id)
+            if existing:
+                existing.match_score = eval_data["match_score"]
+                existing.position_score = eval_data["score_breakdown"]["position_score"]
+                existing.skill_score = eval_data["score_breakdown"]["skill_score"]
+                existing.salary_score = eval_data["score_breakdown"]["salary_score"]
+                existing.location_score = eval_data["score_breakdown"]["location_score"]
+                existing.commute_estimate = eval_data["commute_estimate"]
+                existing.distance_estimate = eval_data["distance_estimate"]
+                existing.matched_reasons = eval_data["matched_reasons"]
+                existing.matched_skills = eval_data["matched_skills"]
+                existing.missing_skills = eval_data["missing_skills"]
+                existing.is_stale = False
+                existing.version += 1
+                existing.updated_at = now
+            else:
+                new_match = JobMatch(
+                    user_id=user_id,
+                    job_id=job.id,
+                    match_score=eval_data["match_score"],
+                    position_score=eval_data["score_breakdown"]["position_score"],
+                    skill_score=eval_data["score_breakdown"]["skill_score"],
+                    salary_score=eval_data["score_breakdown"]["salary_score"],
+                    location_score=eval_data["score_breakdown"]["location_score"],
+                    commute_estimate=eval_data["commute_estimate"],
+                    distance_estimate=eval_data["distance_estimate"],
+                    matched_reasons=eval_data["matched_reasons"],
+                    matched_skills=eval_data["matched_skills"],
+                    missing_skills=eval_data["missing_skills"],
+                    is_stale=False,
+                    version=1,
+                    created_at=now,
+                    updated_at=now
+                )
+                session.add(new_match)
+            count += 1
+
+        await session.commit()
+        return count
+
+    @staticmethod
+    async def recalculate_job_matches(session: AsyncSession, job_id: uuid.UUID) -> int:
+        """
+        Recalculate persistent JobMatch records for a specific job against active worker users.
+        """
+        j_res = await session.execute(select(Job).where(Job.id == job_id))
+        job = j_res.scalar_one_or_none()
+        if not job or job.status != JobStatus.OPEN:
+            # Remove matches for closed/deleted job
+            await session.execute(delete(JobMatch).where(JobMatch.job_id == job_id))
+            await session.commit()
+            return 0
+
+        # Fetch worker users
+        users_res = await session.execute(select(User).limit(200))
+        users = list(users_res.scalars().all())
+
+        existing_matches_res = await session.execute(
+            select(JobMatch).where(JobMatch.job_id == job_id)
+        )
+        match_map = {m.user_id: m for m in existing_matches_res.scalars().all()}
+
+        count = 0
+        now = datetime.now(timezone.utc)
+
+        from app.repositories.resume import ResumeRepository
+        res_repo = ResumeRepository(session)
+
+        for u in users:
+            wp_res = await session.execute(
+                select(WorkerProfile)
+                .options(selectinload(WorkerProfile.worker_skills).selectinload(WorkerSkill.skill))
+                .where(WorkerProfile.user_id == u.id)
+            )
+            wp = wp_res.scalar_one_or_none()
+            published_resume = await res_repo.get_user_published_resume(u.id)
+
+            eval_data = JobMatchService.evaluate_job_match(
+                job=job,
+                worker_profile=wp,
+                user=u,
+                published_resume=published_resume
+            )
+
+            existing = match_map.get(u.id)
+            if existing:
+                existing.match_score = eval_data["match_score"]
+                existing.position_score = eval_data["score_breakdown"]["position_score"]
+                existing.skill_score = eval_data["score_breakdown"]["skill_score"]
+                existing.salary_score = eval_data["score_breakdown"]["salary_score"]
+                existing.location_score = eval_data["score_breakdown"]["location_score"]
+                existing.commute_estimate = eval_data["commute_estimate"]
+                existing.distance_estimate = eval_data["distance_estimate"]
+                existing.matched_reasons = eval_data["matched_reasons"]
+                existing.matched_skills = eval_data["matched_skills"]
+                existing.missing_skills = eval_data["missing_skills"]
+                existing.is_stale = False
+                existing.version += 1
+                existing.updated_at = now
+            else:
+                new_match = JobMatch(
+                    user_id=u.id,
+                    job_id=job.id,
+                    match_score=eval_data["match_score"],
+                    position_score=eval_data["score_breakdown"]["position_score"],
+                    skill_score=eval_data["score_breakdown"]["skill_score"],
+                    salary_score=eval_data["score_breakdown"]["salary_score"],
+                    location_score=eval_data["score_breakdown"]["location_score"],
+                    commute_estimate=eval_data["commute_estimate"],
+                    distance_estimate=eval_data["distance_estimate"],
+                    matched_reasons=eval_data["matched_reasons"],
+                    matched_skills=eval_data["matched_skills"],
+                    missing_skills=eval_data["missing_skills"],
+                    is_stale=False,
+                    version=1,
+                    created_at=now,
+                    updated_at=now
+                )
+                session.add(new_match)
+            count += 1
+
+        await session.commit()
+        return count
+
+    @staticmethod
+    async def refresh_stale_matches(session: AsyncSession) -> int:
+        """
+        Cleanup matches for closed jobs or recalculate stale matches.
+        """
+        # Delete matches for jobs that are no longer OPEN
+        subq = select(Job.id).where(Job.status != JobStatus.OPEN)
+        res = await session.execute(delete(JobMatch).where(JobMatch.job_id.in_(subq)))
+        deleted_count = res.rowcount
+        await session.commit()
+        return deleted_count

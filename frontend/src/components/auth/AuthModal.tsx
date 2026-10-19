@@ -34,9 +34,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
     setLoading(true);
     setError('');
 
+    const cleanEmail = email.trim();
     try {
       if (mode === 'login') {
-        const res = await authService.login({ email, password });
+        const res = await authService.login({ email: cleanEmail, password });
         let loggedUser = res.user;
         if (!loggedUser) {
           loggedUser = await authService.getCurrentUser();
@@ -46,6 +47,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
         }
         localStorage.setItem('ergon_user', JSON.stringify(loggedUser));
         window.dispatchEvent(new Event('ergon_profile_updated'));
+        if (loggedUser.role === 'admin') {
+          window.location.hash = '#admin';
+        }
         onSuccess(loggedUser);
         onClose();
       } else {
@@ -180,12 +184,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md animate-fade-in">
-      <div className="w-full max-w-md rounded-3xl p-6 sm:p-8 shadow-2xl relative border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100">
-        
+    <div 
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/70 backdrop-blur-md animate-fade-in overflow-y-auto"
+    >
+      <div 
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 sm:p-8 shadow-2xl relative border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 max-h-[90vh] overflow-y-auto animate-in slide-in-from-bottom-6 duration-200"
+      >
+        {/* Mobile Drag Handle */}
+        <div className="sm:hidden w-12 h-1.5 bg-slate-300 dark:bg-slate-700 rounded-full mx-auto mb-4 shrink-0" />
+
         <button
           onClick={onClose}
-          className="absolute top-5 right-5 p-2 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 transition-all"
+          className="absolute top-4 right-4 sm:top-5 sm:right-5 p-2 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 transition-all"
         >
           <X className="w-5 h-5" />
         </button>
@@ -198,10 +210,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
 
             <div>
               <h3 className="text-2xl font-black text-slate-900 dark:text-slate-100">
-                Подтверждение Email
+                {t('auth.verify_email_title')}
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-1">
-                Мы отправили 6-значный код подтверждения на адрес <br />
+                {t('auth.enter_code')} <br />
                 <span className="font-extrabold text-indigo-600 dark:text-indigo-400">{email}</span>
               </p>
             </div>
@@ -209,7 +221,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
             {verificationSuccess ? (
               <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-extrabold text-xs flex items-center justify-center gap-2">
                 <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-                <span>Email успешно подтвержден! Авторизация...</span>
+                <span>Email {t('common.success')}!</span>
               </div>
             ) : (
               <form onSubmit={handleVerifyEmailCode} className="space-y-4">
@@ -221,7 +233,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
 
                 <div>
                   <label className="block text-xs font-extrabold text-slate-700 dark:text-slate-300 mb-1">
-                    Введите 6-значный код подтверждения
+                    {t('auth.enter_code')}
                   </label>
                   <input
                     type="text"
@@ -239,7 +251,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
                       disabled={resendTimer > 0}
                       className="text-indigo-600 dark:text-indigo-400 hover:underline font-extrabold disabled:opacity-50 disabled:no-underline"
                     >
-                      {resendTimer > 0 ? `Повторить через ${resendTimer}с` : 'Отправить код повторно'}
+                      {resendTimer > 0 ? `${t('auth.resend_code')} (${resendTimer}s)` : t('auth.resend_code')}
                     </button>
                   </div>
                 </div>
@@ -250,7 +262,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
                   className="w-full py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-black text-xs shadow-md transition-all flex items-center justify-center gap-2"
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>{loading ? 'Проверка...' : 'Подтвердить аккаунт'}</span>
+                  <span>{loading ? t('common.loading') : t('auth.verify_btn')}</span>
                 </button>
               </form>
             )}
@@ -271,7 +283,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
                 onError={(e) => { (e.target as HTMLImageElement).src = '/logo.png'; }}
               />
               <h3 className="text-2xl font-black text-slate-900 dark:text-slate-100">
-                {mode === 'login' ? t('nav.login') : 'Регистрация'}
+                {mode === 'login' ? t('nav.login') : t('auth.register_tab')}
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-1">
                 {mode === 'login' ? 'Получите доступ к AI-инструментам и откликам' : 'Выберите вашу роль на платформе'}

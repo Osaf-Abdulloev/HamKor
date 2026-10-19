@@ -95,25 +95,31 @@ class JobService:
     async def search_jobs(
         self,
         title: Optional[str] = None,
+        search: Optional[str] = None,
         category: Optional[str] = None,
         location: Optional[str] = None,
         employment_type: Optional[EmploymentType] = None,
         salary_min: Optional[float] = None,
         salary_max: Optional[float] = None,
+        source: Optional[str] = None,
         status: Optional[JobStatus] = JobStatus.OPEN,
         company_id: Optional[uuid.UUID] = None,
+        user_id: Optional[uuid.UUID] = None,
         skip: int = 0,
         limit: int = 20
     ) -> Tuple[List[Job], int]:
         return await self.job_repo.search_jobs(
             title=title,
+            search=search,
             category=category,
             location=location,
             employment_type=employment_type,
             salary_min=salary_min,
             salary_max=salary_max,
+            source=source,
             status=status,
             company_id=company_id,
+            user_id=user_id,
             skip=skip,
             limit=limit
         )

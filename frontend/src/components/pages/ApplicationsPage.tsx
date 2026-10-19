@@ -105,7 +105,7 @@ export const ApplicationsPage: React.FC<ApplicationsPageProps> = ({
   // Chat & Candidate Modal States
   const [activeChatRecipient, setActiveChatRecipient] = useState<{ id: string; name: string; avatar?: string } | null>(null);
   const [selectedCandidate, setSelectedCandidate] = useState<any | null>(null);
-  const [contactCandidate, setContactCandidate] = useState<any | null>(null);
+  const [contactCandidateData, setContactCandidateData] = useState<{ candidate: any; applicationId?: string; jobTitle?: string } | null>(null);
 
   const loadApplications = async () => {
     setIsLoading(true);
@@ -370,9 +370,11 @@ export const ApplicationsPage: React.FC<ApplicationsPageProps> = ({
       {/* Applications List */}
       {filteredApps.length > 0 ? (
         <div className="space-y-4">
-          {filteredApps.map((app) => (
-            <div
-              key={app.id}
+          {filteredApps.map((app) => {
+            const statusUpper = (app.status || 'PENDING').toString().toUpperCase();
+            return (
+              <div
+                key={app.id}
               className="glass-card p-6 rounded-3xl border border-slate-200/80 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-xs hover:shadow-md transition-all space-y-4"
             >
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-700 pb-4">
@@ -401,29 +403,34 @@ export const ApplicationsPage: React.FC<ApplicationsPageProps> = ({
                 </div>
 
                 {/* Status Badge */}
-                <div className="flex items-center gap-2">
-                  {app.status === 'ACCEPTED' ? (
-                    <span className="px-3.5 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 text-xs font-black flex items-center gap-1.5 shadow-2xs">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                      <span>Принято</span>
-                    </span>
-                  ) : app.status === 'REJECTED' ? (
-                    <span className="px-3.5 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800/60 text-xs font-black flex items-center gap-1.5 shadow-2xs">
-                      <XCircle className="w-4 h-4 text-rose-600 dark:text-rose-400" />
-                      <span>Отклонено</span>
-                    </span>
-                  ) : app.status === 'CANCELLED' ? (
-                    <span className="px-3.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600 text-xs font-black flex items-center gap-1.5 shadow-2xs">
-                      <XCircle className="w-4 h-4 text-slate-500" />
-                      <span>Отменено</span>
-                    </span>
-                  ) : (
-                    <span className="px-3.5 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 text-xs font-black flex items-center gap-1.5 shadow-2xs">
-                      <Clock className="w-4 h-4 text-indigo-600 dark:text-indigo-400 animate-pulse" />
-                      <span>В рассмотрении</span>
-                    </span>
-                  )}
-                </div>
+                {(() => {
+                  const statusUpper = (app.status || 'PENDING').toString().toUpperCase();
+                  return (
+                    <div className="flex items-center gap-2">
+                      {statusUpper === 'ACCEPTED' ? (
+                        <span className="px-3.5 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 text-xs font-black flex items-center gap-1.5 shadow-2xs">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                          <span>Принято</span>
+                        </span>
+                      ) : statusUpper === 'REJECTED' ? (
+                        <span className="px-3.5 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800/60 text-xs font-black flex items-center gap-1.5 shadow-2xs">
+                          <XCircle className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                          <span>Отклонено</span>
+                        </span>
+                      ) : statusUpper === 'CANCELLED' ? (
+                        <span className="px-3.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600 text-xs font-black flex items-center gap-1.5 shadow-2xs">
+                          <XCircle className="w-4 h-4 text-slate-500" />
+                          <span>Отменено</span>
+                        </span>
+                      ) : (
+                        <span className="px-3.5 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 text-xs font-black flex items-center gap-1.5 shadow-2xs">
+                          <Clock className="w-4 h-4 text-indigo-600 dark:text-indigo-400 animate-pulse" />
+                          <span>В рассмотрении</span>
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Cover Note Section */}
@@ -450,15 +457,15 @@ export const ApplicationsPage: React.FC<ApplicationsPageProps> = ({
               {user?.role !== 'employer' && (
                 <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
                   <div className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                    {app.status === 'ACCEPTED' ? (
+                    {statusUpper === 'ACCEPTED' ? (
                       <span className="text-emerald-600 dark:text-emerald-400 font-extrabold flex items-center gap-1">
                         🎉 Работодатель принял ваш отклик! Вы можете написать работодателю прямо в чате.
                       </span>
-                    ) : app.status === 'REJECTED' ? (
+                    ) : statusUpper === 'REJECTED' ? (
                       <span className="text-rose-600 dark:text-rose-400 font-bold">
                         ⚠️ Работодатель отклонил этот отклик. Повторный отклик невозможен.
                       </span>
-                    ) : app.status === 'CANCELLED' ? (
+                    ) : statusUpper === 'CANCELLED' ? (
                       <span className="text-slate-500 font-bold">
                         Отклик был отменен.
                       </span>
@@ -468,7 +475,7 @@ export const ApplicationsPage: React.FC<ApplicationsPageProps> = ({
                   </div>
 
                   <div className="flex items-center gap-2">
-                    {app.status === 'ACCEPTED' && (
+                    {statusUpper === 'ACCEPTED' && (
                       <button
                         onClick={() => {
                           const empId = app.employer_id || app.company_user_id;
@@ -483,7 +490,7 @@ export const ApplicationsPage: React.FC<ApplicationsPageProps> = ({
                       </button>
                     )}
 
-                    {(app.status === 'PENDING' || app.status === 'REVIEWED') && (
+                    {(statusUpper === 'PENDING' || statusUpper === 'REVIEWED') && (
                       <>
                         <button
                           onClick={() => {
@@ -520,19 +527,19 @@ export const ApplicationsPage: React.FC<ApplicationsPageProps> = ({
                           setFeedbackNote('');
                         }}
                         className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 shadow-2xs active:scale-95 ${
-                          app.status === 'ACCEPTED'
+                          statusUpper === 'ACCEPTED'
                             ? 'bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-400/40'
                             : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-600 hover:text-white'
                         }`}
                       >
                         <CheckCircle2 className="w-4 h-4" />
-                        <span>{app.status === 'ACCEPTED' ? 'Принято' : 'Принять'}</span>
+                        <span>{statusUpper === 'ACCEPTED' ? 'Принято' : 'Принять'}</span>
                       </button>
 
                       {/* Smooth Animated Reject Button */}
                       <div
                         className={`transition-all duration-500 ease-in-out transform origin-left ${
-                          app.status === 'ACCEPTED'
+                          statusUpper === 'ACCEPTED'
                             ? 'opacity-0 max-w-0 scale-90 overflow-hidden pointer-events-none p-0 border-0 shadow-none -ml-2'
                             : 'opacity-100 max-w-[140px] scale-100 ml-0'
                         }`}
@@ -542,10 +549,14 @@ export const ApplicationsPage: React.FC<ApplicationsPageProps> = ({
                             setFeedbackApp({ id: app.id, status: 'REJECTED' });
                             setFeedbackNote('');
                           }}
-                          className="px-4 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 hover:bg-rose-600 hover:text-white text-xs font-black transition-all flex items-center gap-1.5 whitespace-nowrap shadow-2xs active:scale-95"
+                          className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 whitespace-nowrap shadow-2xs active:scale-95 ${
+                            statusUpper === 'REJECTED'
+                              ? 'bg-rose-600 text-white shadow-sm ring-2 ring-rose-400/40'
+                              : 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 hover:bg-rose-600 hover:text-white'
+                          }`}
                         >
                           <XCircle className="w-4 h-4" />
-                          <span>Отклонить</span>
+                          <span>{statusUpper === 'REJECTED' ? 'Отклонено' : 'Отклонить'}</span>
                         </button>
                       </div>
                     </div>
@@ -567,7 +578,11 @@ export const ApplicationsPage: React.FC<ApplicationsPageProps> = ({
                             full_name: aAny.worker_name || aAny.full_name || aAny.user?.full_name
                           }
                         };
-                        setContactCandidate(cand);
+                        setContactCandidateData({
+                          candidate: cand,
+                          applicationId: app.id,
+                          jobTitle: app.job_title
+                        });
                       }}
                       className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center gap-2 transition-all shadow-md active:scale-95"
                     >
@@ -597,7 +612,8 @@ export const ApplicationsPage: React.FC<ApplicationsPageProps> = ({
                 </span>
               </div>
             </div>
-          ))}
+          );
+        })}
         </div>
       ) : (
         <div className="ref-card p-12 text-center space-y-4">
@@ -711,8 +727,10 @@ export const ApplicationsPage: React.FC<ApplicationsPageProps> = ({
 
       {/* Contact Candidate Modal */}
       <ContactCandidateModal
-        candidate={contactCandidate}
-        onClose={() => setContactCandidate(null)}
+        candidate={contactCandidateData?.candidate || null}
+        applicationId={contactCandidateData?.applicationId || null}
+        jobTitle={contactCandidateData?.jobTitle || null}
+        onClose={() => setContactCandidateData(null)}
         user={user}
         onOpenAuth={onOpenAuth}
         onOpenChat={onNavigateToChat}

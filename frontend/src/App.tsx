@@ -18,7 +18,9 @@ import { AuthModal } from './components/auth/AuthModal';
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { MutedScreen } from './components/auth/MutedScreen';
 import { ResumeHubPage } from './components/resumes/ResumeHubPage';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { FloatingAIButton } from './components/layout/FloatingAIButton';
+import { BottomNavigation } from './components/layout/BottomNavigation';
 import { HamKorIntroLoader } from './components/layout/HamKorIntroLoader';
 import { jobService, authService } from './services/api';
 import { Job, Candidate } from './types';
@@ -49,9 +51,18 @@ export const App: React.FC = () => {
       const seen = sessionStorage.getItem('hamkor_intro_shown');
       return !seen;
     } catch (e) {
-      return true;
+      return false;
     }
   });
+
+  useEffect(() => {
+    if (showIntro) {
+      const timer = setTimeout(() => {
+        setShowIntro(false);
+      }, 4200);
+      return () => clearTimeout(timer);
+    }
+  }, [showIntro]);
 
   const [activeTab, setActiveTab] = useState<string>(getInitialTab);
   const [searchMode, setSearchMode] = useState<'job' | 'candidate'>('job');
@@ -147,6 +158,7 @@ export const App: React.FC = () => {
 
     const handleProfileUpdated = () => {
       authService.getCurrentUser().then((u) => setUser(u));
+      loadJobs();
     };
 
     const handleHashChange = () => {
@@ -227,7 +239,7 @@ export const App: React.FC = () => {
       />
 
       {/* Main Area */}
-      <div className="flex-1 w-full">
+      <div className="flex-1 w-full pb-[calc(4.5rem+env(safe-area-inset-bottom,0px))] md:pb-0">
         {activeTab === 'admin' ? (
           <AdminDashboard user={user} onOpenAuth={() => setIsAuthOpen(true)} />
         ) : activeTab === 'home' ? (
@@ -286,7 +298,9 @@ export const App: React.FC = () => {
             )}
 
             {activeTab === 'resumes' && (
-              <ResumeHubPage user={user} onOpenAuth={() => setIsAuthOpen(true)} />
+              <ErrorBoundary fallbackMessage="Произошла ошибка в Конструкторе Резюме">
+                <ResumeHubPage user={user} onOpenAuth={() => setIsAuthOpen(true)} />
+              </ErrorBoundary>
             )}
 
 
@@ -376,6 +390,15 @@ export const App: React.FC = () => {
 
       {/* Floating AI Button accessible on all pages */}
       <FloatingAIButton onNavigateToAIConsultant={handleNavigateToAIConsultant} />
+
+      {/* Bottom Navigation for Mobile Devices */}
+      <BottomNavigation
+        activeTab={activeTab}
+        setActiveTab={changeActiveTab}
+        user={user}
+        onOpenAuth={() => setIsAuthOpen(true)}
+        onLogout={handleLogout}
+      />
 
       {/* 3D Intro / Loading Screen */}
       {showIntro && (

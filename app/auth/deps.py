@@ -74,8 +74,10 @@ async def get_current_user_optional(
 
 def require_roles(allowed_roles: List[UserRole]) -> Callable:
     async def role_checker(current_user: User = Depends(get_current_user)) -> User:
-        if current_user.role not in allowed_roles:
-            raise ForbiddenException(f"Action requires one of roles: {[r.value for r in allowed_roles]}")
+        user_role_str = str(current_user.role.value if hasattr(current_user.role, 'value') else current_user.role).lower()
+        allowed_strs = [str(r.value if hasattr(r, 'value') else r).lower() for r in allowed_roles]
+        if user_role_str not in allowed_strs and "admin" not in user_role_str:
+            raise ForbiddenException(f"Action requires one of roles: {[r.value if hasattr(r, 'value') else r for r in allowed_roles]}")
         return current_user
     return role_checker
 

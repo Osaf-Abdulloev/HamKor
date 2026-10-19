@@ -9,9 +9,10 @@ import {
 import { aiService, profileService, telegramService } from '../../services/api';
 import { resumeService } from '../../services/resumeService';
 import { Job } from '../../types';
-import { DEFAULT_USER_AVATAR, evaluateProfileJobMatch, getSavedUserProfile, saveUserProfile } from '../../services/matchService';
+import { DEFAULT_USER_AVATAR, evaluateProfileJobMatch, getSavedUserProfile, saveUserProfile, sanitizeUserProfile } from '../../services/matchService';
 import { EmployerProfilePage } from './EmployerProfilePage';
 import { useLanguage } from '../../i18n/LanguageContext';
+import { openTelegramLink, getTelegramUrls } from '../../utils/telegram';
 import { CVUploadModal } from '../cv/CVUploadModal';
 import { ProfileSuggestionsReviewModal } from '../cv/ProfileSuggestionsReviewModal';
 
@@ -219,42 +220,78 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
   const [tgInput, setTgInput] = useState<string>('');
   const [tgStatusMsg, setTgStatusMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [isConnectingTg, setIsConnectingTg] = useState<boolean>(false);
+  const [tgStatus, setTgStatus] = useState<any>(null);
+  const [tgSettings, setTgSettings] = useState<any>({
+    telegram_notifications_enabled: true,
+    telegram_job_recommendations_enabled: true,
+    telegram_messages_enabled: true,
+    telegram_system_notifications_enabled: true,
+    telegram_promotional_enabled: true,
+  });
 
   const [isUploadCvModalOpen, setIsUploadCvModalOpen] = useState(false);
   const [activeReviewCvId, setActiveReviewCvId] = useState<string | null>(null);
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+
+  const loadTelegramStatus = async () => {
+    try {
+      const data = await telegramService.getTelegramStatus();
+      setTgStatus(data);
+      if (data.settings) {
+        setTgSettings(data.settings);
+      }
+    } catch (e) {}
+  };
+
+  useEffect(() => {
+    loadTelegramStatus();
+  }, [user?.id]);
 
   const handleConnectTelegram = async (customId?: string) => {
     setIsConnectingTg(true);
     setTgStatusMsg(null);
     try {
       const input = customId || tgInput;
-      if (!input.trim() && !user?.telegram_chat_id) {
-        setTgStatusMsg({ text: 'Пожалуйста, введите ваш Chat ID или @username в Telegram', type: 'error' });
-        setIsConnectingTg(false);
-        return;
+      const payload = input.trim() ? { telegram_username: input.trim() } : {};
+      const res = await telegramService.getTelegramLink(payload);
+      if (res.bot_url) {
+        window.open(res.bot_url, '_blank');
+        setTgStatusMsg({
+          text: `🎉 Ссылка сгенерирована! Откройте бота и нажмите '/start'. Код: ${res.link_code}`,
+          type: 'success'
+        });
       }
-      const payload = input.trim() ? { telegram_chat_id: input.trim() } : { telegram_chat_id: user?.telegram_chat_id };
-      const res = await telegramService.connectTelegram(payload);
-      setTgStatusMsg({ text: res.message || '✅ Telegram аккаунт успешно привязан! Тестовое сообщение отправлено.', type: 'success' });
+      await loadTelegramStatus();
       setTgInput('');
     } catch (err: any) {
-      setTgStatusMsg({ text: err.response?.data?.detail || 'Ошибка при подключении Telegram. Проверьте введенный Chat ID.', type: 'error' });
+      setTgStatusMsg({ text: err.response?.data?.detail || 'Ошибка при получении ссылки Telegram.', type: 'error' });
     } finally {
       setIsConnectingTg(false);
     }
   };
 
   const handleOpenTelegramBot = async () => {
+    await handleConnectTelegram();
+  };
+
+  const handleUnlinkTelegram = async () => {
     try {
-      const data = await telegramService.getTelegramLink();
-      if (data.bot_url) {
-        window.open(data.bot_url, '_blank');
-      } else {
-        window.open('https://t.me/HamKorJobsBot', '_blank');
-      }
+      await telegramService.unlinkTelegram();
+      setTgStatusMsg({ text: 'Telegram аккаунт успешно отключен.', type: 'success' });
+      await loadTelegramStatus();
+      window.dispatchEvent(new Event('ergon_profile_updated'));
+    } catch (err: any) {
+      setTgStatusMsg({ text: 'Ошибка при отключении Telegram.', type: 'error' });
+    }
+  };
+
+  const handleToggleTgSetting = async (key: string, value: boolean) => {
+    const updated = { ...tgSettings, [key]: value };
+    setTgSettings(updated);
+    try {
+      await telegramService.updateTelegramSettings({ [key]: value });
     } catch (e) {
-      window.open('https://t.me/HamKorJobsBot', '_blank');
+      setTgSettings(tgSettings);
     }
   };
 
@@ -477,6 +514,9 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
             certificates: formattedCertificates
           });
         }
+
+        // Notify app to re-fetch personalized jobs across all pages
+        window.dispatchEvent(new Event('ergon_profile_updated'));
       } catch (e) {
         console.error('Failed to save profile to DB:', e);
       }
@@ -566,14 +606,14 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
   const generateAIProfileAnalysis = () => {
     const userPos = (profile.position || '').trim();
     const userBio = (profile.bio || '').trim();
-    const userSkills = profile.skills;
+    const userSkills = Array.isArray(profile.skills) ? profile.skills : [];
     const userLoc = profile.location || 'г. Душанбе';
 
     // 1. POSITION / ROLE ANALYSIS
     let positionAnalysis = 'Укажите желаемую должность для проведения полной аналитики уровня дохода и спроса.';
     if (userPos) {
       const posLower = userPos.toLowerCase();
-      if (posLower.includes('закуп') || userSkills.some((s) => s.toLowerCase().includes('закуп'))) {
+      if (posLower.includes('закуп') || userSkills.some((s) => typeof s === 'string' && s.toLowerCase().includes('закуп'))) {
         positionAnalysis = `Специализация "${userPos}" входит в ТОП-3 наиболее востребованных категорий в Таджикистане. Высокий спрос в торговых сетях и банках. Оценка зарплаты: 6000–12000 TJS.`;
       } else if (posLower.includes('hr') || posLower.includes('кадр')) {
         positionAnalysis = `Позиция "${userPos}" востребована в крупном бизнесе и финтех-секторе. Оценка зарплаты: 5000–11000 TJS.`;
@@ -620,8 +660,8 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
 
   const handleAddMissingSkill = (newSkill: string) => {
     if (!newSkill) return;
-    const currentSkills = profile.skills || [];
-    if (currentSkills.some((s) => s.toLowerCase() === newSkill.toLowerCase())) return;
+    const currentSkills = Array.isArray(profile.skills) ? profile.skills : [];
+    if (currentSkills.some((s) => typeof s === 'string' && s.toLowerCase() === newSkill.toLowerCase())) return;
 
     const updatedSkills = [...currentSkills, newSkill];
     setProfile((prev) => {
@@ -641,9 +681,9 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
   const calculateMatchedVacancies = (): MatchedJobResult[] => {
     const userPos = (profile.position || '').toLowerCase().trim();
     const userBio = (profile.bio || '').toLowerCase().trim();
-    const userSkills = profile.skills.map((s) => s.toLowerCase());
+    const userSkills = (Array.isArray(profile.skills) ? profile.skills : []).map((s) => typeof s === 'string' ? s.toLowerCase() : String(s || '').toLowerCase());
 
-    const isProcurement = userPos.includes('закуп') || userBio.includes('закуп') || userSkills.some((s) => s.includes('закуп'));
+    const isProcurement = userPos.includes('закуп') || userBio.includes('закуп') || userSkills.some((s) => typeof s === 'string' && s.includes('закуп'));
     const isHR = userPos.includes('hr') || userPos.includes('кадр') || userPos.includes('персонал');
     const isIT = userPos.includes('разработ') || userPos.includes('frontend') || userPos.includes('react') || userPos.includes('программ');
 
@@ -667,10 +707,11 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
     if (evaluated.length === 0 || evaluated[0].matchScore < 60) {
       const dynTitle = profile.position.trim() || (isProcurement ? 'Менеджер по закупкам' : isHR ? 'HR-специалист' : isIT ? 'Frontend Разработчик' : 'Специалист проекта');
       
+      const safeSkills = Array.isArray(profile.skills) ? profile.skills : [];
       const fallbackJob: Job = {
         id: `profile-matched-job-1`,
         title: dynTitle,
-        description: `Вакансия "${dynTitle}" на HamKor. Подходит под ваш профиль и навыки (${profile.skills.length > 0 ? profile.skills.join(', ') : 'закупки'}).`,
+        description: `Вакансия "${dynTitle}" на HamKor. Подходит под ваш профиль и навыки (${safeSkills.length > 0 ? safeSkills.join(', ') : 'закупки'}).`,
         location: profile.location || 'г. Душанбе',
         employment_type: profile.work_format === 'remote' ? 'remote' : 'full_time',
         status: 'open',
@@ -697,7 +738,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
           commuteEstimate: profile.commute_time === 'up_to_15' ? '~12 мин в пути' : '~18 мин в пути',
           distanceEstimate: '~3.8 км от дома',
           matchedReasons: ['100% Совпадение профиля и локации', 'Подходит по желаемой зарплате', 'Удобная дорога до работы'],
-          matchedSkills: profile.skills.length > 0 ? profile.skills : ['Закупки', 'Переговоры'],
+          matchedSkills: safeSkills.length > 0 ? safeSkills : ['Закупки', 'Переговоры'],
           missingSkills: ['Excel Pivot'],
           growthAdvice: ['Идеальное совпадение по ключевым критериям']
         }
@@ -711,16 +752,17 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
 
   const handleGenerateCV = async () => {
     setIsGeneratingCV(true);
+    const safeSkills = Array.isArray(profile.skills) ? profile.skills : [];
     try {
-      const promptText = `Сгенерировать резюме для: ${profile.full_name || 'Соискатель'}, должность: ${profile.position || 'Специалист'}, город: ${profile.location}, навыки: ${profile.skills.join(', ')}, переезд: ${relocationLabels[profile.relocation]}, время в пути: ${commuteLabels[profile.commute_time]}`;
+      const promptText = `Сгенерировать резюме для: ${profile.full_name || 'Соискатель'}, должность: ${profile.position || 'Специалист'}, город: ${profile.location}, навыки: ${safeSkills.join(', ')}, переезд: ${relocationLabels[profile.relocation]}, время в пути: ${commuteLabels[profile.commute_time]}`;
       const data = await aiService.generateCV({
         prompt: promptText,
         user_details: profile
       });
-      setGeneratedCVText(data.generated_text || data.result || `РЕЗЮМЕ СОИСКАТЕЛЯ HAMKOR\n\nФИО: ${profile.full_name || 'Соискатель'}\nДолжность: ${profile.position || 'Специалист'}\nЛокация: ${profile.location}\nНавыки: ${profile.skills.join(', ')}\nПереезд: ${relocationLabels[profile.relocation]}\n\nОПИСАНИЕ:\n${profile.bio || 'Квалифицированный специалист.'}`);
+      setGeneratedCVText(data.generated_text || data.result || `РЕЗЮМЕ СОИСКАТЕЛЯ HAMKOR\n\nФИО: ${profile.full_name || 'Соискатель'}\nДолжность: ${profile.position || 'Специалист'}\nЛокация: ${profile.location}\nНавыки: ${safeSkills.join(', ')}\nПереезд: ${relocationLabels[profile.relocation]}\n\nОПИСАНИЕ:\n${profile.bio || 'Квалифицированный специалист.'}`);
     } catch (e) {
       setGeneratedCVText(
-        `ПРОФЕССИОНАЛЬНОЕ РЕЗЮМЕ\n\nФИО: ${profile.full_name || 'Соискатель'}\nДолжность: ${profile.position || 'Специалист'}\nТелефон: ${profile.phone || 'Не указан'}\nEmail: ${profile.email}\nГород: ${profile.location}\nКлючевые навыки: ${profile.skills.join(', ')}\n\nОПЫТ:\n${profile.bio || 'Навыки и опыт в соответствующей сфере.'}`
+        `ПРОФЕССИОНАЛЬНОЕ РЕЗЮМЕ\n\nФИО: ${profile.full_name || 'Соискатель'}\nДолжность: ${profile.position || 'Специалист'}\nТелефон: ${profile.phone || 'Не указан'}\nEmail: ${profile.email}\nГород: ${profile.location}\nКлючевые навыки: ${safeSkills.join(', ')}\n\nОПЫТ:\n${profile.bio || 'Навыки и опыт в соответствующей сфере.'}`
       );
     } finally {
       setIsGeneratingCV(false);
@@ -921,38 +963,38 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
           </div>
 
           {/* Company Description */}
-          <div className="pt-4 border-t border-slate-200/80 space-y-2">
-            <h3 className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">О компании</h3>
-            <p className="text-xs text-slate-600 leading-relaxed font-medium">
+          <div className="pt-4 border-t border-slate-200/80 dark:border-slate-700 space-y-2">
+            <h3 className="text-xs font-extrabold text-slate-900 dark:text-slate-100 uppercase tracking-wider">О компании</h3>
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed font-medium">
               {profile.bio || 'Надежная развивающаяся компания в Таджикистане. Мы привлекаем квалифицированных специалистов и создаем отличные условия труда.'}
             </p>
           </div>
 
           {/* Target Specialist Requirements ("Кого мы ищем") */}
-          <div className="pt-4 border-t border-slate-200/80 space-y-4">
-            <h3 className="text-xs font-extrabold text-slate-900 uppercase tracking-wider flex items-center gap-2">
-              <Target className="w-4 h-4 text-indigo-600" />
+          <div className="pt-4 border-t border-slate-200/80 dark:border-slate-700 space-y-4">
+            <h3 className="text-xs font-extrabold text-slate-900 dark:text-slate-100 uppercase tracking-wider flex items-center gap-2">
+              <Target className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
               <span>Требования к сотрудникам и искомые специалисты</span>
             </h3>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-1.5 shadow-2xs">
-                <span className="text-[11px] font-bold text-slate-400 uppercase">Требуемые вакансии</span>
-                <p className="text-xs font-black text-slate-900">
+              <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 space-y-1.5 shadow-2xs">
+                <span className="text-[11px] font-bold text-slate-400 dark:text-slate-400 uppercase">Требуемые вакансии</span>
+                <p className="text-xs font-black text-slate-900 dark:text-slate-100">
                   {profile.position || 'Бухгалтер, Программист, Менеджер'}
                 </p>
               </div>
 
-              <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-1.5 shadow-2xs">
-                <span className="text-[11px] font-bold text-slate-400 uppercase">Опыт работы</span>
-                <p className="text-xs font-black text-slate-900">
+              <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 space-y-1.5 shadow-2xs">
+                <span className="text-[11px] font-bold text-slate-400 dark:text-slate-400 uppercase">Опыт работы</span>
+                <p className="text-xs font-black text-slate-900 dark:text-slate-100">
                   От 1 года до 3 лет
                 </p>
               </div>
 
-              <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-1.5 shadow-2xs">
-                <span className="text-[11px] font-bold text-slate-400 uppercase">Предлагаемая зарплата</span>
-                <p className="text-xs font-black text-indigo-600">
+              <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 space-y-1.5 shadow-2xs">
+                <span className="text-[11px] font-bold text-slate-400 dark:text-slate-400 uppercase">Предлагаемая зарплата</span>
+                <p className="text-xs font-black text-indigo-600 dark:text-indigo-400">
                   {profile.expected_salary ? `${profile.expected_salary} TJS` : 'От 5000 до 12000 TJS'}
                 </p>
               </div>
@@ -961,10 +1003,10 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
             {/* Key Required Skills */}
             {profile.skills.length > 0 && (
               <div className="space-y-1.5">
-                <span className="text-[11px] font-bold text-slate-500">Ключевые требуемые навыки:</span>
+                <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Ключевые требуемые навыки:</span>
                 <div className="flex flex-wrap gap-1.5">
                   {profile.skills.map((s) => (
-                    <span key={s} className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-100 text-xs font-extrabold">
+                    <span key={s} className="px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-100 dark:border-indigo-800/60 text-xs font-extrabold">
                       ✓ {s}
                     </span>
                   ))}
@@ -983,8 +1025,8 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
       {/* ── 1. TOP MAIN HEADER & ACTION BUTTONS ── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-black text-slate-900 tracking-tight">{t('profile.title')}</h1>
-          <p className="text-xs text-slate-500 font-medium mt-1">
+          <h1 className="text-3xl font-black text-slate-900 dark:text-slate-100 tracking-tight">{t('profile.title')}</h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-1">
             {t('profile.subtitle')}
           </p>
         </div>
@@ -1047,13 +1089,13 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
       )}
 
       {/* ── 2. TOP MOST IMPORTANT PROFILE SUMMARY CARD ── */}
-      <div className="ref-card p-6 bg-white border border-indigo-100 shadow-sm relative space-y-4">
+      <div className="glass-card p-6 bg-white dark:bg-slate-800/90 border border-indigo-100 dark:border-slate-700 shadow-sm relative space-y-4">
         <div className="flex flex-col sm:flex-row items-start gap-5">
           
           {/* Avatar / Instagram Style Default Avatar with Upload & Delete */}
           <div className="relative group shrink-0">
             <div className="w-20 h-20 rounded-2xl bg-gradient-to-tr from-amber-500 via-rose-500 to-purple-600 p-0.5 shadow-md">
-              <div className="w-full h-full rounded-[14px] bg-white overflow-hidden flex items-center justify-center relative">
+              <div className="w-full h-full rounded-[14px] bg-white dark:bg-slate-900 overflow-hidden flex items-center justify-center relative">
                 <img
                   src={profile.avatar_url || DEFAULT_INSTAGRAM_AVATAR}
                   alt={profile.full_name || 'Avatar'}
@@ -1087,35 +1129,35 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
           <div className="space-y-2 w-full">
             <div className="flex items-start justify-between">
               <div>
-                <h2 className="text-2xl font-black text-slate-900 tracking-tight">
+                <h2 className="text-2xl font-black text-slate-900 dark:text-slate-100 tracking-tight">
                   {profile.full_name || <span className="text-slate-400 font-bold italic">--</span>}
                 </h2>
-                <p className="text-xs font-bold text-indigo-600 mt-0.5">
+                <p className="text-xs font-bold text-indigo-600 dark:text-indigo-400 mt-0.5">
                   {profile.position || <span className="text-slate-400 italic">--</span>}
                 </p>
               </div>
 
               {/* Progress meter pill */}
               <div className="flex items-center gap-2 shrink-0">
-                <span className="text-xs font-black text-slate-900">{score}%</span>
-                <div className="w-24 h-2 rounded-full bg-slate-100 overflow-hidden">
+                <span className="text-xs font-black text-slate-900 dark:text-slate-100">{score}%</span>
+                <div className="w-24 h-2 rounded-full bg-slate-100 dark:bg-slate-700 overflow-hidden">
                   <div className="h-full bg-gradient-to-r from-indigo-600 to-amber-500 rounded-full" style={{ width: `${score}%` }} />
                 </div>
               </div>
             </div>
 
-            <p className="text-xs text-slate-600 leading-relaxed font-medium">
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed font-medium">
               {profile.bio || <span className="text-slate-400 italic">--</span>}
             </p>
 
             {/* Candidate Skills Pills */}
             {profile.skills.length > 0 && (
               <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                <span className="text-[10px] font-extrabold text-slate-400 uppercase mr-1 flex items-center gap-1">
+                <span className="text-[10px] font-extrabold text-slate-400 dark:text-slate-400 uppercase mr-1 flex items-center gap-1">
                   <Zap className="w-3 h-3 text-amber-500" /> {t('profile.skills_label')}
                 </span>
                 {profile.skills.map((s) => (
-                  <span key={s} className="px-2.5 py-0.5 rounded-lg bg-indigo-50 border border-indigo-100 text-indigo-700 text-[11px] font-extrabold">
+                  <span key={s} className="px-2.5 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-100 dark:border-indigo-800/60 text-indigo-700 dark:text-indigo-300 text-[11px] font-extrabold">
                     {s}
                   </span>
                 ))}
@@ -1124,29 +1166,29 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
 
             {/* Key Quick Badges Row */}
             <div className="flex flex-wrap items-center gap-2 pt-1">
-              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-3 py-1 rounded-xl bg-slate-100 text-slate-700 border border-slate-200">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-3 py-1 rounded-xl bg-slate-100 dark:bg-slate-700/60 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-600">
                 <MapPin className="w-3.5 h-3.5 text-indigo-500" />
                 {profile.location}
               </span>
               
-              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-3 py-1 rounded-xl bg-slate-100 text-slate-700 border border-slate-200">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-3 py-1 rounded-xl bg-slate-100 dark:bg-slate-700/60 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-600">
                 <Briefcase className="w-3.5 h-3.5 text-indigo-500" />
                 {workFormatLabels[profile.work_format] || t('modal.employment_standard')}
               </span>
 
               {profile.expected_salary && (
-                <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold px-3 py-1 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
-                  {t('catalog.salary_min')} {profile.expected_salary} TJS
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold px-3 py-1 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60">
+                  <DollarSign className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                  от {profile.expected_salary} TJS
                 </span>
               )}
 
               {profile.no_driving_license ? (
-                <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-lg bg-slate-100 text-slate-500">
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-700/60 text-slate-500 dark:text-slate-400">
                   🚗 {t('profile.no_license_btn')}
                 </span>
               ) : profile.driving_categories.length > 0 ? (
-                <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-100">
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-100 dark:border-indigo-800/60">
                   🚗 {profile.driving_categories.join('/')}
                 </span>
               ) : null}
@@ -1157,18 +1199,18 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
 
       {/* ── PUBLISHED AI RESUME CARD (IF CANDIDATE PUBLISHED AN AI RESUME) ── */}
       {publishedResume && (
-        <div className="glass-card p-6 rounded-3xl border border-indigo-200 bg-gradient-to-r from-indigo-50/90 via-purple-50/50 to-white shadow-md space-y-4 animate-fade-in">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-indigo-100 pb-4">
+        <div className="glass-card p-6 rounded-3xl border border-indigo-200 dark:border-indigo-900/60 bg-gradient-to-r from-indigo-50/90 via-purple-50/50 to-white dark:from-slate-800/95 dark:via-indigo-950/50 dark:to-slate-800 shadow-md space-y-4 animate-fade-in">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-indigo-100 dark:border-indigo-900/60 pb-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-md shrink-0">
                 <Sparkles className="w-5 h-5 text-amber-300" />
               </div>
               <div>
-                <span className="text-[11px] font-black text-emerald-700 bg-emerald-100 border border-emerald-200 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 shadow-2xs">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                <span className="text-[11px] font-black text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/80 border border-emerald-200 dark:border-emerald-800/80 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 shadow-2xs">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                   <span>Активное ИИ Резюме (Опубликовано ✓)</span>
                 </span>
-                <h3 className="text-base font-black text-slate-900 mt-1">
+                <h3 className="text-base font-black text-slate-900 dark:text-slate-100 mt-1">
                   {publishedResume.target_position || publishedResume.content?.personal_info?.desired_position || 'Специалист'}
                 </h3>
               </div>
@@ -1176,6 +1218,9 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
 
             <button
               onClick={() => {
+                if (publishedResume?.id) {
+                  localStorage.setItem('ergon_edit_resume_id', publishedResume.id);
+                }
                 if (onNavigateToResumes) {
                   onNavigateToResumes();
                 } else {
@@ -1192,8 +1237,8 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
 
           {/* Executive Summary */}
           {publishedResume.content?.personal_info?.summary && (
-            <div className="p-4 rounded-2xl bg-white border border-indigo-100/80 text-xs text-slate-700 space-y-1.5 shadow-2xs">
-              <span className="font-bold text-indigo-900 block">Профессиональное резюме (Executive Summary):</span>
+            <div className="p-4 rounded-2xl bg-white dark:bg-slate-900/80 border border-indigo-100/80 dark:border-indigo-900/50 text-xs text-slate-700 dark:text-slate-300 space-y-1.5 shadow-2xs">
+              <span className="font-bold text-indigo-900 dark:text-indigo-300 block">Профессиональное резюме (Executive Summary):</span>
               <p className="leading-relaxed font-medium">{publishedResume.content.personal_info.summary}</p>
             </div>
           )}
@@ -1201,10 +1246,10 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
           {/* Key Technical Skills */}
           {publishedResume.content?.skills?.technical && publishedResume.content.skills.technical.length > 0 && (
             <div className="space-y-1.5">
-              <span className="text-xs font-bold text-slate-700">Подтвержденные навыки из ИИ Резюме:</span>
+              <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Подтвержденные навыки из ИИ Резюме:</span>
               <div className="flex flex-wrap gap-1.5">
                 {publishedResume.content.skills.technical.map((sk: string, idx: number) => (
-                  <span key={idx} className="px-2.5 py-1 rounded-xl bg-white border border-indigo-200 text-indigo-800 text-[11px] font-bold shadow-2xs">
+                  <span key={idx} className="px-2.5 py-1 rounded-xl bg-white dark:bg-slate-900/80 border border-indigo-200 dark:border-indigo-800 text-indigo-800 dark:text-indigo-300 text-[11px] font-bold shadow-2xs">
                     {sk}
                   </span>
                 ))}
@@ -1362,84 +1407,146 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
               </div>
             </div>
 
-            {/* Telegram Bot Notifications & Integration Card */}
-            <div className="ref-card p-5 space-y-4 bg-gradient-to-br from-sky-50/80 to-indigo-50/40 dark:from-sky-950/30 dark:to-slate-800/80 border border-sky-200 dark:border-sky-800/60 shadow-sm col-span-1 md:col-span-2">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-sky-100 dark:border-slate-700 pb-3">
+            {/* Telegram Bot Notifications & Integration Ecosystem Card */}
+            <div className="ref-card p-5 space-y-4 bg-gradient-to-br from-sky-50/90 via-slate-50 to-indigo-50/50 dark:from-sky-950/40 dark:via-slate-900/80 dark:to-indigo-950/40 border border-sky-200 dark:border-sky-800/60 shadow-sm col-span-1 md:col-span-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-sky-100 dark:border-slate-700/80 pb-3.5">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl bg-sky-500 text-white flex items-center justify-center shadow-md shrink-0">
-                    <TelegramIcon className="w-5 h-5" />
+                  <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-sky-400 to-sky-600 text-white flex items-center justify-center shadow-md shrink-0">
+                    <TelegramIcon className="w-6 h-6" />
                   </div>
                   <div>
                     <h4 className="text-sm font-black text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                      <span>Интеграция с Telegram-ботом HamKor</span>
-                      {user?.telegram_chat_id ? (
-                        <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 text-[10px] font-black border border-emerald-300 dark:border-emerald-800">
-                          ✓ Подключен
+                      <span>Telegram Интеграция</span>
+                      {tgStatus?.telegram_is_verified || user?.telegram_chat_id ? (
+                        <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-700 dark:text-emerald-300 text-[10px] font-black border border-emerald-300 dark:border-emerald-800 flex items-center gap-1">
+                          ✓ Подключен {tgStatus?.telegram_username ? `@${tgStatus.telegram_username}` : ''}
                         </span>
                       ) : (
-                        <span className="px-2.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 text-[10px] font-black border border-amber-300 dark:border-amber-800">
-                          Не привязан
+                        <span className="px-2.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/90 text-amber-700 dark:text-amber-300 text-[10px] font-black border border-amber-300 dark:border-amber-800">
+                          Не подключен
                         </span>
                       )}
                     </h4>
                     <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                      Получайте мгновенные уведомления об откликах, статусах вакансий и сообщениях в чате прямо в свой Telegram.
+                      Персональные уведомления об откликах, вакансиях, сообщениях работодателей и подборках прямо в Telegram.
                     </p>
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={handleOpenTelegramBot}
-                  className="px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-600 text-white text-xs font-extrabold flex items-center gap-2 transition-all shadow-md active:scale-95 shrink-0"
-                >
-                  <TelegramIcon className="w-4 h-4" />
-                  <span>Открыть Telegram бота</span>
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  {tgStatus?.telegram_is_verified || user?.telegram_chat_id ? (
+                    <button
+                      type="button"
+                      onClick={handleUnlinkTelegram}
+                      className="px-3.5 py-2 rounded-xl bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300 hover:bg-rose-200 text-xs font-extrabold border border-rose-300 dark:border-rose-800 transition-all active:scale-95"
+                    >
+                      Отключить Telegram
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleOpenTelegramBot}
+                      disabled={isConnectingTg}
+                      className="px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-600 text-white text-xs font-extrabold flex items-center gap-2 transition-all shadow-md active:scale-95 disabled:opacity-50"
+                    >
+                      <TelegramIcon className="w-4 h-4" />
+                      <span>{isConnectingTg ? 'Генерация...' : 'Подключить Telegram'}</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               {tgStatusMsg && (
-                <div className={`p-3 rounded-xl text-xs font-bold ${
+                <div className={`p-3.5 rounded-xl text-xs font-bold ${
                   tgStatusMsg.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200 dark:bg-rose-950/60 dark:text-rose-200'
                 }`}>
                   {tgStatusMsg.text}
                 </div>
               )}
 
-              {/* Telegram manual connect form */}
-              <div className="flex flex-col sm:flex-row items-center gap-3 pt-1">
-                <div className="relative w-full flex-1">
-                  <input
-                    type="text"
-                    placeholder="Введите ваш Chat ID или @username (например: 123456789)"
-                    value={tgInput}
-                    onChange={(e) => setTgInput(e.target.value)}
-                    className="w-full px-4 py-2.5 rounded-xl text-xs font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-sky-500"
-                  />
-                </div>
+              {/* Username Input & Deep Link generation section */}
+              {!(tgStatus?.telegram_is_verified || user?.telegram_chat_id) && (
+                <div className="flex flex-col sm:flex-row items-center gap-3 pt-1">
+                  <div className="relative w-full flex-1">
+                    <span className="absolute left-3.5 top-2.5 text-xs text-slate-400 font-bold">@</span>
+                    <input
+                      type="text"
+                      placeholder="telegram_username (необязательно)"
+                      value={tgInput}
+                      onChange={(e) => setTgInput(e.target.value.replace(/^@/, ''))}
+                      className="w-full pl-8 pr-4 py-2.5 rounded-xl text-xs font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-sky-500"
+                    />
+                  </div>
 
-                <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
                   <button
                     type="button"
                     onClick={() => handleConnectTelegram()}
                     disabled={isConnectingTg}
-                    className="px-5 py-2.5 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-extrabold hover:bg-slate-800 dark:hover:bg-white transition-all shadow-sm active:scale-95 disabled:opacity-50"
+                    className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-600 text-white text-xs font-extrabold transition-all shadow-md active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
                   >
-                    {isConnectingTg ? 'Подключение...' : 'Привязать аккаунт'}
+                    <TelegramIcon className="w-4 h-4" />
+                    <span>{isConnectingTg ? 'Генерация токена...' : 'Получить токен и открыть бота'}</span>
                   </button>
-
-                  {user?.telegram_chat_id && (
-                    <button
-                      type="button"
-                      onClick={() => handleConnectTelegram(user.telegram_chat_id)}
-                      className="px-3.5 py-2.5 rounded-xl bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-300 text-xs font-bold hover:bg-emerald-200 transition-all active:scale-95"
-                      title="Отправить проверочное сообщение в Telegram"
-                    >
-                      Проверить 📲
-                    </button>
-                  )}
                 </div>
-              </div>
+              )}
+
+              {/* Fine-grained Notification Toggles Section */}
+              {(tgStatus?.telegram_is_verified || user?.telegram_chat_id) && (
+                <div className="pt-2 border-t border-sky-100 dark:border-slate-700/60 space-y-2.5">
+                  <h5 className="text-xs font-extrabold text-slate-800 dark:text-slate-200">Настройки уведомлений Telegram:</h5>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                    <label className="flex items-center justify-between p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 cursor-pointer">
+                      <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Все уведомления</span>
+                      <input
+                        type="checkbox"
+                        checked={tgSettings.telegram_notifications_enabled}
+                        onChange={(e) => handleToggleTgSetting('telegram_notifications_enabled', e.target.checked)}
+                        className="w-4 h-4 accent-sky-500 rounded"
+                      />
+                    </label>
+
+                    <label className="flex items-center justify-between p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 cursor-pointer">
+                      <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Рекомендации вакансий</span>
+                      <input
+                        type="checkbox"
+                        checked={tgSettings.telegram_job_recommendations_enabled}
+                        onChange={(e) => handleToggleTgSetting('telegram_job_recommendations_enabled', e.target.checked)}
+                        className="w-4 h-4 accent-sky-500 rounded"
+                      />
+                    </label>
+
+                    <label className="flex items-center justify-between p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 cursor-pointer">
+                      <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Сообщения</span>
+                      <input
+                        type="checkbox"
+                        checked={tgSettings.telegram_messages_enabled}
+                        onChange={(e) => handleToggleTgSetting('telegram_messages_enabled', e.target.checked)}
+                        className="w-4 h-4 accent-sky-500 rounded"
+                      />
+                    </label>
+
+                    <label className="flex items-center justify-between p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 cursor-pointer">
+                      <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Системные</span>
+                      <input
+                        type="checkbox"
+                        checked={tgSettings.telegram_system_notifications_enabled}
+                        onChange={(e) => handleToggleTgSetting('telegram_system_notifications_enabled', e.target.checked)}
+                        className="w-4 h-4 accent-sky-500 rounded"
+                      />
+                    </label>
+
+                    <label className="flex items-center justify-between p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 cursor-pointer">
+                      <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Промо и предложения</span>
+                      <input
+                        type="checkbox"
+                        checked={tgSettings.telegram_promotional_enabled}
+                        onChange={(e) => handleToggleTgSetting('telegram_promotional_enabled', e.target.checked)}
+                        className="w-4 h-4 accent-sky-500 rounded"
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Logout Account Button Card */}
@@ -1471,16 +1578,16 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
       <div className="space-y-4 pt-6 border-t border-slate-200">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
-            <h3 className="text-lg font-black text-slate-900 tracking-tight flex items-center gap-2">
-              <Briefcase className="w-5 h-5 text-indigo-600" />
+            <h3 className="text-lg font-black text-slate-900 dark:text-slate-100 tracking-tight flex items-center gap-2">
+              <Briefcase className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
               {t('profile.matched_vacancies_title')}
             </h3>
-            <p className="text-xs text-slate-500 font-medium mt-0.5">
+            <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">
               {t('profile.matched_vacancies_sub')}
             </p>
           </div>
-          <span className="text-xs font-black text-indigo-600 bg-indigo-50 border border-indigo-100 px-3 py-1 rounded-xl shrink-0">
-            {t('profile.found_count')}: {matchedVacancies.length}
+          <span className="text-xs font-black text-indigo-600 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-100 dark:border-indigo-800/60 px-3 py-1 rounded-xl shrink-0">
+            Подходящих вакансий: {matchedVacancies.length}
           </span>
         </div>
 
@@ -1488,7 +1595,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
           {matchedVacancies.map(({ job, matchScore, scoreBreakdown, commuteEstimate, distanceEstimate, matchedReasons, matchedSkills, missingSkills, growthAdvice }) => (
             <div 
               key={job.id}
-              className="ref-card p-5 bg-white border border-indigo-100 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-4 group relative overflow-hidden"
+              className="glass-card p-5 bg-white dark:bg-slate-800/90 border border-indigo-100 dark:border-slate-700 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-4 group relative overflow-hidden"
             >
               <div className="space-y-3">
                 <div className="flex items-start justify-between gap-2">
@@ -1496,60 +1603,60 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
                     <div className="flex items-center gap-2">
                       <span className={`inline-flex items-center gap-1 text-[10px] font-black px-2.5 py-0.5 rounded-full border ${
                         matchScore >= 85 
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                          ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/60' 
                           : matchScore >= 70 
-                          ? 'bg-indigo-50 text-indigo-700 border-indigo-200' 
-                          : 'bg-amber-50 text-amber-700 border-amber-200'
+                          ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800/60' 
+                          : 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/60'
                       }`}>
                         🎯 {matchScore}% Совпадение
                       </span>
                     </div>
 
-                    <h4 className="text-sm font-black text-slate-900 group-hover:text-indigo-600 transition-colors line-clamp-1">
+                    <h4 className="text-sm font-black text-slate-900 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors line-clamp-1">
                       {job.title}
                     </h4>
-                    <p className="text-[11px] text-slate-500 font-semibold flex items-center gap-1">
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold flex items-center gap-1">
                       <Building2 className="w-3.5 h-3.5 text-slate-400" />
                       {job.external_company_name || 'Работодатель HamKor'}
                     </p>
                   </div>
 
-                  <span className="text-xs font-black text-indigo-600 px-2.5 py-1 rounded-xl bg-indigo-50 border border-indigo-100 shrink-0">
+                  <span className="text-xs font-black text-indigo-600 dark:text-indigo-300 px-2.5 py-1 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-100 dark:border-indigo-800/60 shrink-0">
                     {job.salary_min ? `от ${job.salary_min.toLocaleString()} ${job.currency || 'TJS'}` : 'По договоренности'}
                   </span>
                 </div>
 
                 {/* Score Breakdown Pills */}
                 {scoreBreakdown && (
-                  <div className="grid grid-cols-4 gap-1 p-2 rounded-xl bg-slate-50 border border-slate-100 text-[10px] text-slate-600 font-bold text-center">
+                  <div className="grid grid-cols-4 gap-1 p-2 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-700/60 text-[10px] text-slate-600 dark:text-slate-300 font-bold text-center">
                     <div>
                       <span className="block text-[9px] text-slate-400 font-semibold">Должность</span>
-                      <span className="text-slate-900 font-black">{scoreBreakdown.positionScore}/30</span>
+                      <span className="text-slate-900 dark:text-slate-100 font-black">{scoreBreakdown.positionScore}/30</span>
                     </div>
                     <div>
                       <span className="block text-[9px] text-slate-400 font-semibold">Навыки</span>
-                      <span className="text-indigo-600 font-black">{scoreBreakdown.skillScore}/35</span>
+                      <span className="text-indigo-600 dark:text-indigo-400 font-black">{scoreBreakdown.skillScore}/35</span>
                     </div>
                     <div>
                       <span className="block text-[9px] text-slate-400 font-semibold">Зарплата</span>
-                      <span className="text-emerald-600 font-black">{scoreBreakdown.salaryScore}/15</span>
+                      <span className="text-emerald-600 dark:text-emerald-400 font-black">{scoreBreakdown.salaryScore}/15</span>
                     </div>
                     <div>
                       <span className="block text-[9px] text-slate-400 font-semibold">Локация</span>
-                      <span className="text-amber-600 font-black">{scoreBreakdown.locationScore}/15</span>
+                      <span className="text-amber-600 dark:text-amber-400 font-black">{scoreBreakdown.locationScore}/15</span>
                     </div>
                   </div>
                 )}
 
                 {/* Matched Skills Row */}
                 {matchedSkills.length > 0 && (
-                  <div className="p-2 rounded-xl bg-indigo-50/60 border border-indigo-100 space-y-1">
-                    <span className="text-[10px] font-extrabold text-indigo-900 uppercase flex items-center gap-1">
+                  <div className="p-2 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/50 space-y-1">
+                    <span className="text-[10px] font-extrabold text-indigo-900 dark:text-indigo-300 uppercase flex items-center gap-1">
                       <Zap className="w-3 h-3 text-amber-500" /> Совпавшие навыки ({matchedSkills.length}):
                     </span>
                     <div className="flex flex-wrap gap-1">
                       {matchedSkills.map((sk) => (
-                        <span key={sk} className="px-2 py-0.5 rounded bg-white text-indigo-700 text-[10px] font-extrabold border border-indigo-100">
+                        <span key={sk} className="px-2 py-0.5 rounded bg-white dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-200 text-[10px] font-extrabold border border-indigo-100 dark:border-indigo-800/60">
                           ✓ {sk}
                         </span>
                       ))}
@@ -1559,19 +1666,19 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
 
                 {/* Missing Skills Row with 1-click add */}
                 {missingSkills && missingSkills.length > 0 && (
-                  <div className="p-2 rounded-xl bg-amber-50/60 border border-amber-200 space-y-1">
-                    <span className="text-[10px] font-extrabold text-amber-900 uppercase flex items-center gap-1">
-                      <Sparkles className="w-3 h-3 text-amber-600" /> Требуется для этой должности (Добавить в 1 клик):
+                  <div className="p-2 rounded-xl bg-amber-50/60 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/50 space-y-1">
+                    <span className="text-[10px] font-extrabold text-amber-900 dark:text-amber-300 uppercase flex items-center gap-1">
+                      <Sparkles className="w-3 h-3 text-amber-600 dark:text-amber-400" /> Требуется для этой должности (Добавить в 1 клик):
                     </span>
                     <div className="flex flex-wrap gap-1">
                       {missingSkills.map((sk) => (
                         <button
                           key={sk}
                           onClick={() => handleAddMissingSkill(sk)}
-                          className="px-2 py-0.5 rounded bg-white text-amber-800 hover:bg-amber-100 text-[10px] font-extrabold border border-amber-300 transition-all flex items-center gap-1 cursor-pointer active:scale-95"
+                          className="px-2 py-0.5 rounded bg-white dark:bg-amber-900/60 text-amber-800 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-800 text-[10px] font-extrabold border border-amber-300 dark:border-amber-800/60 transition-all flex items-center gap-1 cursor-pointer active:scale-95"
                           title="Нажмите, чтобы моментально добавить в ваш профиль"
                         >
-                          <Plus className="w-2.5 h-2.5 text-amber-600" /> {sk} (+12%)
+                          <Plus className="w-2.5 h-2.5 text-amber-600 dark:text-amber-400" /> {sk} (+12%)
                         </button>
                       ))}
                     </div>
@@ -1580,18 +1687,18 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
 
                 {/* Growth Advice if present */}
                 {growthAdvice && growthAdvice.length > 0 && (
-                  <div className="text-[10px] font-semibold text-slate-500 italic bg-slate-50 p-2 rounded-lg border border-slate-100">
+                  <div className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 italic bg-slate-50 dark:bg-slate-900/60 p-2 rounded-lg border border-slate-100 dark:border-slate-700/60">
                     💡 {growthAdvice[0]}
                   </div>
                 )}
 
                 {/* Distance & Commute Logistics Badge */}
-                <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 space-y-1">
-                  <div className="flex items-center justify-between text-[11px] font-extrabold text-slate-700">
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-700/60 space-y-1">
+                  <div className="flex items-center justify-between text-[11px] font-extrabold text-slate-700 dark:text-slate-300">
                     <span className="flex items-center gap-1">
-                      <MapPin className="w-3.5 h-3.5 text-indigo-600" /> {job.location} ({distanceEstimate})
+                      <MapPin className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" /> {job.location} ({distanceEstimate})
                     </span>
-                    <span className="text-indigo-600 font-bold flex items-center gap-1">
+                    <span className="text-indigo-600 dark:text-indigo-400 font-bold flex items-center gap-1">
                       <Clock className="w-3 h-3" /> {commuteEstimate}
                     </span>
                   </div>
@@ -1600,7 +1707,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
                 {/* Matched reasons list */}
                 <div className="flex flex-wrap gap-1.5 pt-1">
                   {matchedReasons.map((reason, idx) => (
-                    <span key={idx} className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 flex items-center gap-1">
+                    <span key={idx} className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700/60 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-600 flex items-center gap-1">
                       ✓ {reason}
                     </span>
                   ))}
@@ -1616,6 +1723,18 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
               </button>
             </div>
           ))}
+        </div>
+
+        {/* View All Vacancies Link */}
+        <div className="pt-2 flex justify-center">
+          <button
+            type="button"
+            onClick={() => { window.location.hash = '#jobs'; }}
+            className="px-6 py-3 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/80 text-indigo-700 dark:text-indigo-300 font-extrabold text-xs border border-indigo-200 dark:border-indigo-800 shadow-xs transition-all active:scale-95 flex items-center gap-2"
+          >
+            <span>Посмотреть все подобранные вакансии</span>
+            <ArrowUpRight className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+          </button>
         </div>
       </div>
 
@@ -2000,7 +2119,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <TelegramIcon className="w-5 h-5 text-sky-500" />
-                            <span className="font-extrabold text-xs text-slate-900 dark:text-white">Интеграция с Telegram-ботом HamKor</span>
+                            <span className="font-extrabold text-xs text-slate-900 dark:text-white">Интеграция с Telegram-ботом HamKor (@HamKorJobsBot)</span>
                           </div>
                           {user?.telegram_chat_id ? (
                             <span className="px-2.5 py-1 bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 text-[11px] font-black rounded-full border border-emerald-300 dark:border-emerald-800">
@@ -2014,26 +2133,45 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onOpenAuth, onLo
                         </div>
 
                         <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                          Привяжите ваш Telegram аккаунт, чтобы получать мгновенные уведомления о новых откликах, статусах и сообщениях в чате прямо в свой Telegram!
+                          Привяжите ваш Telegram аккаунт, чтобы получать мгновенные персональные уведомления о новых откликах, вакансиях и рекомендациях прямо в свой Telegram!
                         </p>
 
                         <div className="flex flex-wrap items-center gap-2.5 pt-1">
                           <button
                             type="button"
-                            onClick={async () => {
+                            onClick={async (e) => {
                               try {
                                 const data = await telegramService.getTelegramLink();
                                 if (data.bot_url) {
-                                  window.open(data.bot_url, '_blank');
+                                  openTelegramLink(e, data.bot_url);
+                                } else {
+                                  openTelegramLink(e, 'https://t.me/HamKorJobsBot');
                                 }
-                              } catch (e) {
-                                window.open('https://t.me/HamKorJobsBot', '_blank');
+                              } catch (err) {
+                                openTelegramLink(e, 'https://t.me/HamKorJobsBot');
                               }
                             }}
-                            className="px-4 py-2 bg-sky-500 hover:bg-sky-600 text-white rounded-xl text-xs font-extrabold flex items-center gap-1.5 shadow-md transition-all active:scale-95"
+                            className="px-4 py-2.5 bg-sky-500 hover:bg-sky-600 text-white rounded-xl text-xs font-extrabold flex items-center gap-2 shadow-md transition-all active:scale-95 cursor-pointer"
                           >
-                            <TelegramIcon className="w-3.5 h-3.5" />
-                            <span>Связать Telegram (Открыть бота)</span>
+                            <TelegramIcon className="w-4 h-4" />
+                            <span>Открыть в приложении Telegram (tg://)</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={async (e) => {
+                              try {
+                                const data = await telegramService.getTelegramLink();
+                                const urls = getTelegramUrls(data.bot_url || 'https://t.me/HamKorJobsBot');
+                                window.open(urls.mirrorUrl, '_blank', 'noopener,noreferrer');
+                              } catch (err) {
+                                window.open('https://telegram.me/HamKorJobsBot', '_blank', 'noopener,noreferrer');
+                              }
+                            }}
+                            className="px-3.5 py-2.5 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-sky-600 dark:text-sky-400 rounded-xl text-xs font-bold border border-sky-200 dark:border-sky-800 transition-all flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>Зеркало сайта (telegram.me)</span>
                           </button>
                         </div>
                       </div>

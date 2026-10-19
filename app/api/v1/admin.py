@@ -26,7 +26,7 @@ class UpdateRoleSchema(BaseModel):
 
 class MuteUserSchema(BaseModel):
     is_muted: Optional[bool] = True
-    duration_hours: Optional[int] = None  # None or 0 means permanent
+    duration_hours: Optional[int] = None
     reason: Optional[str] = "Заблокирован администратором"
 
 @router.get("/stats")

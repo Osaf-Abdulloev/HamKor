@@ -37,6 +37,9 @@ export const FavoritesPage: React.FC<FavoritesPageProps> = ({
 
   useEffect(() => {
     loadFavorites();
+    const handleRefresh = () => loadFavorites();
+    window.addEventListener('ergon_favorites_updated', handleRefresh);
+    return () => window.removeEventListener('ergon_favorites_updated', handleRefresh);
   }, [activeTab]);
 
   const handleRemoveFavorite = async (targetType: 'job' | 'worker' | 'company', targetId: string) => {

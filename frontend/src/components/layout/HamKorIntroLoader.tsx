@@ -21,11 +21,24 @@ export const HamKorIntroLoader: React.FC<HamKorIntroLoaderProps> = ({ onComplete
       return;
     }
 
+    // Safety fallback timer to prevent infinite blank overlay
+    const safetyTimer = setTimeout(() => {
+      onCompleteRef.current();
+    }, 4000);
+
     // 1. PARTICLES BACKGROUND CANVAS
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas) {
+      onCompleteRef.current();
+      clearTimeout(safetyTimer);
+      return;
+    }
     const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    if (!ctx) {
+      onCompleteRef.current();
+      clearTimeout(safetyTimer);
+      return;
+    }
 
     let animId: number;
     let width = (canvas.width = window.innerWidth);

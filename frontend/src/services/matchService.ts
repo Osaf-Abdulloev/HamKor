@@ -69,6 +69,53 @@ export interface ProfileMatchEvaluation {
   distanceEstimate: string;
 }
 
+export const sanitizeUserProfile = (profile: any): UserProfileData => {
+  if (!profile || typeof profile !== 'object') {
+    return {
+      full_name: '',
+      email: '',
+      phone: '',
+      location: 'г. Душанбе',
+      position: 'Менеджер по закупкам',
+      bio: '',
+      education: '',
+      expected_salary: '8000 TJS',
+      relocation: 'not_ready',
+      commute_time: 'any',
+      work_format: 'full_time',
+      has_driving_license: false,
+      driving_categories: [],
+      has_own_car: false,
+      no_driving_license: false,
+      github_url: '',
+      portfolio_url: '',
+      linkedin_url: '',
+      telegram_url: '',
+      no_github: false,
+      certificates: [],
+      experiences: [],
+      skills: [],
+      no_certificates: false,
+      avatar_url: ''
+    };
+  }
+
+  const rawSkills = Array.isArray(profile.skills) ? profile.skills : [];
+  const cleanSkills = rawSkills.map((s: any) => {
+    if (typeof s === 'string') return s;
+    if (s && typeof s === 'object' && s.name) return String(s.name);
+    return String(s || '');
+  }).filter(Boolean);
+
+  return {
+    ...profile,
+    skills: cleanSkills,
+    certificates: Array.isArray(profile.certificates) ? profile.certificates : [],
+    experiences: Array.isArray(profile.experiences) ? profile.experiences : [],
+    driving_categories: Array.isArray(profile.driving_categories) ? profile.driving_categories : []
+  };
+};
+
 export const getSavedUserProfile = (user?: any): UserProfileData | null => {
   if (!user || !user.id) return null;
   try {
@@ -84,7 +131,7 @@ export const getSavedUserProfile = (user?: any): UserProfileData | null => {
       if (data) {
         try {
           const parsed = JSON.parse(data);
-          if (parsed && typeof parsed === 'object') return parsed;
+          if (parsed && typeof parsed === 'object') return sanitizeUserProfile(parsed);
         } catch (e) {}
       }
     }

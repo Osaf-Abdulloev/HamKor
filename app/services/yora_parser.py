@@ -1,13 +1,15 @@
 import logging
 import re
+import asyncio
+from datetime import datetime, timezone
 import httpx
-from urllib.parse import unquote
-from typing import Dict, Any, Optional
-from sqlalchemy import select
+from typing import Dict, Any, Optional, List, Set
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.domain import Job
 from app.models.enums import EmploymentType, JobStatus
+from app.services.vacancy_normalizer import VacancyNormalizer
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +19,7 @@ YORA_BASE_VACANCY_URL = "https://yora.tj/ru/vacancies"
 class YoraParserService:
     def __init__(self, session: AsyncSession):
         self.session = session
+        self.normalizer = VacancyNormalizer()
 
     @staticmethod
     def _map_employment_type(work_format_name: Optional[str]) -> EmploymentType:
@@ -35,26 +38,16 @@ class YoraParserService:
 
     @staticmethod
     def _clean_text(raw_text: Optional[str]) -> str:
-        if not raw_text or not isinstance(raw_text, str):
-            return ""
-        text = re.sub(r'<br\s*/?>', '\n', raw_text)
-        text = re.sub(r'</p>', '\n', text)
-        text = re.sub(r'<[^>]+>', '', text)
-        text = re.sub(r'&quot;', '"', text)
-        text = re.sub(r'&amp;', '&', text)
-        text = re.sub(r'&lt;', '<', text)
-        text = re.sub(r'&gt;', '>', text)
-        text = re.sub(r'&#39;', "'", text)
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        return text.strip()
+        return VacancyNormalizer.clean_html(raw_text)
 
     @staticmethod
     def _build_description(item: Dict[str, Any]) -> str:
         parts = []
 
-        org_name = item.get("organisation_name") or "Работодатель"
-        pos_title = item.get("position") or "Специалист"
-        region = item.get("region_id_name") or "Таджикистан"
+        org_name = (item.get("organisation_name") or "Работодатель").strip()
+        pos_title = (item.get("position") or "Специалист").strip()
+        raw_region = item.get("region_id_name") or "Таджикистан"
+        region = VacancyNormalizer.normalize_city(raw_region)
         exp_level = item.get("experience_level_name")
         work_format = item.get("work_format_name")
 
@@ -67,19 +60,19 @@ class YoraParserService:
             meta_info.append(f"⏰ Формат работы: {work_format}")
         parts.append("\n".join(meta_info))
 
-        position_txt = YoraParserService._clean_text(item.get("position_txt"))
+        position_txt = VacancyNormalizer.clean_html(item.get("position_txt"))
         if position_txt and len(position_txt) > 20:
             parts.append(f"📌 Описание вакансии:\n{position_txt}")
 
-        responsibilities = YoraParserService._clean_text(item.get("responsibilities"))
+        responsibilities = VacancyNormalizer.clean_html(item.get("responsibilities"))
         if responsibilities:
             parts.append(f"📋 Обязанности:\n{responsibilities}")
 
-        requirements = YoraParserService._clean_text(item.get("requirements"))
+        requirements = VacancyNormalizer.clean_html(item.get("requirements"))
         if requirements:
             parts.append(f"🎯 Требования к кандидату:\n{requirements}")
 
-        conditions = YoraParserService._clean_text(item.get("conditions"))
+        conditions = VacancyNormalizer.clean_html(item.get("conditions"))
         if conditions:
             parts.append(f"🎁 Условия и преимущества:\n{conditions}")
 
@@ -89,15 +82,27 @@ class YoraParserService:
         parts.append(f"\nℹ️ Вакансия верифицирована и импортирована с официального портала yora.tj")
         return "\n\n".join(parts)
 
-    async def fetch_and_sync(self, max_pages: Optional[int] = None, page_size: int = 50) -> Dict[str, int]:
+    async def fetch_and_sync(
+        self,
+        max_pages: Optional[int] = None,
+        page_size: int = 50,
+        full_import: bool = True
+    ) -> Dict[str, Any]:
         stats = {
+            "source": "yora.tj",
+            "total_found": 0,
             "total_fetched": 0,
             "created": 0,
             "updated": 0,
-            "errors": 0
+            "deactivated": 0,
+            "errors": 0,
+            "pages_processed": 0
         }
 
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        seen_external_ids: Set[str] = set()
+        now_utc = datetime.now(timezone.utc)
+
+        async with httpx.AsyncClient(timeout=35.0, follow_redirects=True) as client:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "application/json"
@@ -110,43 +115,83 @@ class YoraParserService:
                 if max_pages and current_page > max_pages:
                     break
 
-                try:
-                    params = {
-                        "page": current_page,
-                        "page_size": page_size
-                    }
-                    response = await client.get(YORA_API_SEARCH_URL, headers=headers, params=params)
+                fetch_success = False
+                retries = 3
+                for attempt in range(retries):
+                    try:
+                        params = {
+                            "page": current_page,
+                            "page_size": page_size
+                        }
+                        response = await client.get(YORA_API_SEARCH_URL, headers=headers, params=params)
 
-                    if response.status_code != 200:
-                        logger.error(f"Failed to fetch page {current_page} from yora.tj API: HTTP {response.status_code}")
-                        stats["errors"] += 1
-                        break
+                        if response.status_code == 200:
+                            data = response.json()
+                            total_pages = data.get("total_pages", 1)
+                            stats["total_found"] = data.get("total_cnt") or (total_pages * page_size)
+                            items = data.get("data", [])
 
-                    data = response.json()
-                    total_pages = data.get("total_pages", 1)
-                    items = data.get("data", [])
+                            for item in items:
+                                stats["total_fetched"] += 1
+                                vac_id = item.get("id")
+                                if vac_id:
+                                    seen_external_ids.add(str(vac_id))
 
-                    for item in items:
-                        stats["total_fetched"] += 1
-                        try:
-                            async with self.session.begin_nested():
-                                await self._sync_single_vacancy(client, item, stats)
-                        except Exception as e:
-                            logger.error(f"Error syncing vacancy {item.get('id')}: {e}")
-                            stats["errors"] += 1
+                                try:
+                                    async with self.session.begin_nested():
+                                        await self._sync_single_vacancy(client, item, stats, now_utc)
+                                except Exception as e:
+                                    logger.error(f"Error syncing Yora vacancy {item.get('id')}: {e}")
+                                    stats["errors"] += 1
 
-                    await self.session.commit()
+                            await self.session.commit()
+                            fetch_success = True
+                            stats["pages_processed"] += 1
+                            break
+                        else:
+                            logger.warning(f"Yora page {current_page} attempt {attempt+1} status {response.status_code}")
+                            await asyncio.sleep(1.0 * (attempt + 1))
+                    except Exception as e:
+                        logger.error(f"Network error fetching Yora page {current_page} (attempt {attempt+1}): {e}")
+                        await asyncio.sleep(1.0 * (attempt + 1))
 
-                except Exception as e:
-                    logger.error(f"Error fetching page {current_page} from yora.tj: {e}")
+                if not fetch_success:
+                    logger.error(f"Failed to fetch Yora page {current_page} after {retries} attempts.")
                     stats["errors"] += 1
-                    break
 
                 current_page += 1
+                await asyncio.sleep(0.1)
 
+        # Soft delete / deactivation logic for full import mode
+        if full_import and seen_external_ids:
+            try:
+                stmt = select(Job).where(
+                    Job.external_source == "yora.tj",
+                    Job.is_external == True,
+                    Job.status == JobStatus.OPEN
+                )
+                result = await self.session.execute(stmt)
+                existing_yora_jobs = result.scalars().all()
+
+                for job in existing_yora_jobs:
+                    if job.external_id and job.external_id not in seen_external_ids:
+                        job.status = JobStatus.CLOSED
+                        stats["deactivated"] += 1
+
+                await self.session.commit()
+            except Exception as e:
+                logger.error(f"Error deactivating stale Yora vacancies: {e}")
+
+        logger.info(f"YORA IMPORT FINISHED: {stats}")
         return stats
 
-    async def _sync_single_vacancy(self, client: httpx.AsyncClient, item: Dict[str, Any], stats: Dict[str, int]) -> None:
+    async def _sync_single_vacancy(
+        self,
+        client: httpx.AsyncClient,
+        item: Dict[str, Any],
+        stats: Dict[str, Any],
+        now_utc: datetime
+    ) -> None:
         vac_id = item.get("id")
         if not vac_id:
             return
@@ -156,49 +201,35 @@ class YoraParserService:
         title = (item.get("position") or "Вакансия").strip()
         description = self._build_description(item)
 
-        salary_min = None
-        sal_from = item.get("salary_from")
-        if sal_from:
-            try:
-                val = float(sal_from)
-                if val > 0:
-                    salary_min = val
-            except (ValueError, TypeError):
-                pass
+        raw_sal_from = item.get("salary_from")
+        raw_sal_to = item.get("salary_to")
+        raw_curr = item.get("currency_name") or "TJS"
+        salary_min, salary_max, currency = VacancyNormalizer.parse_salary(
+            sal_from=raw_sal_from,
+            sal_to=raw_sal_to,
+            raw_currency=raw_curr
+        )
 
-        salary_max = None
-        sal_to = item.get("salary_to")
-        if sal_to:
-            try:
-                val = float(sal_to)
-                if val > 0:
-                    salary_max = val
-            except (ValueError, TypeError):
-                pass
-
-        raw_currency = item.get("currency_name") or "TJS"
-        if "Somoni" in raw_currency or "TJS" in raw_currency:
-            currency = "TJS"
-        elif "USD" in raw_currency or "Dollar" in raw_currency or "$" in raw_currency:
-            currency = "USD"
-        elif "RUB" in raw_currency or "Ruble" in raw_currency:
-            currency = "RUB"
-        else:
-            currency = raw_currency[:50]
-        location = item.get("region_id_name") or "Таджикистан"
+        raw_location = item.get("region_id_name") or "Таджикистан"
+        location = VacancyNormalizer.normalize_city(raw_location)
         work_format = item.get("work_format_name")
         employment_type = self._map_employment_type(work_format)
 
+        category = VacancyNormalizer.normalize_category(title, description, item.get("position"))
         org_name = (item.get("organisation_name") or "Компания").strip()
         org_logo = await self._extract_logo_async(client, item)
         external_url = f"{YORA_BASE_VACANCY_URL}/{external_id}"
+        published_at = VacancyNormalizer.parse_datetime(item.get("publish_date")) or now_utc
 
         req_dict = {
             "experience_level": item.get("experience_level_name"),
             "work_format": work_format,
-            "responsibilities": self._clean_text(item.get("responsibilities")),
-            "requirements": self._clean_text(item.get("requirements"))
+            "responsibilities": VacancyNormalizer.clean_html(item.get("responsibilities")),
+            "requirements": VacancyNormalizer.clean_html(item.get("requirements")),
+            "skills": [s.strip() for s in title.split() if len(s.strip()) > 2]
         }
+
+        group_id = VacancyNormalizer.compute_job_group_id(title, org_name, location)
 
         # Check existing job
         stmt = select(Job).where(
@@ -215,12 +246,17 @@ class YoraParserService:
             existing_job.salary_max = salary_max
             existing_job.currency = currency
             existing_job.location = location
+            existing_job.category = category
             existing_job.employment_type = employment_type
             existing_job.requirements = req_dict
             existing_job.external_company_name = org_name
             existing_job.external_company_logo = org_logo
             existing_job.external_url = external_url
             existing_job.status = JobStatus.OPEN
+            existing_job.raw_data = item
+            existing_job.published_at = published_at
+            existing_job.last_seen_at = now_utc
+            existing_job.job_group_id = group_id
             stats["updated"] += 1
         else:
             new_job = Job(
@@ -231,6 +267,7 @@ class YoraParserService:
                 salary_max=salary_max,
                 currency=currency,
                 location=location,
+                category=category,
                 employment_type=employment_type,
                 status=JobStatus.OPEN,
                 requirements=req_dict,
@@ -239,7 +276,12 @@ class YoraParserService:
                 external_id=external_id,
                 external_url=external_url,
                 external_company_name=org_name,
-                external_company_logo=org_logo
+                external_company_logo=org_logo,
+                raw_data=item,
+                published_at=published_at,
+                first_seen_at=now_utc,
+                last_seen_at=now_utc,
+                job_group_id=group_id
             )
             self.session.add(new_job)
             stats["created"] += 1

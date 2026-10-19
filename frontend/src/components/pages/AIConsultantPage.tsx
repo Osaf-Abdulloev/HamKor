@@ -75,28 +75,92 @@ export const AIConsultantPage: React.FC<AIConsultantPageProps> = ({ jobs, onSele
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(sessions));
-    } catch (e) {
-      console.error('Error saving AI sessions:', e);
-    }
-  }, [sessions, storageKey]);
+    // Sync backend sessions when user is authenticated
+    const loadBackendSessions = async () => {
+      if (!user) return;
+      try {
+        const backendSessions = await aiService.getSessions();
+        if (Array.isArray(backendSessions) && backendSessions.length > 0) {
+          const formattedSessions: AIChatSession[] = backendSessions.map((s: any) => ({
+            id: s.id,
+            title: s.title || 'Новый диалог',
+            createdAt: s.created_at || new Date().toISOString(),
+            updatedAt: s.created_at || new Date().toISOString(),
+            messages: []
+          }));
+          setSessions(formattedSessions);
+          setActiveSessionId(formattedSessions[0].id);
+
+          // Load detail of active session
+          const detail = await aiService.getSessionDetail(formattedSessions[0].id);
+          if (detail && Array.isArray(detail.messages)) {
+            const formattedMsgs: AIMessage[] = detail.messages.map((m: any) => ({
+              id: m.id,
+              sender: m.role === 'user' ? 'user' : 'ai',
+              text: m.content
+            }));
+            setSessions((prev) =>
+              prev.map((s) => (s.id === formattedSessions[0].id ? { ...s, messages: formattedMsgs } : s))
+            );
+          }
+        }
+      } catch (err) {
+        console.warn('Backend sessions load warning:', err);
+      }
+    };
+    loadBackendSessions();
+  }, [user]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) || sessions[0];
   const messages = activeSession ? activeSession.messages : [];
 
-  const handleCreateNewChat = () => {
+  const handleSelectSession = async (sessionId: string) => {
+    setActiveSessionId(sessionId);
+    if (!user) return;
+    try {
+      const detail = await aiService.getSessionDetail(sessionId);
+      if (detail && Array.isArray(detail.messages)) {
+        const formattedMsgs: AIMessage[] = detail.messages.map((m: any) => ({
+          id: m.id,
+          sender: m.role === 'user' ? 'user' : 'ai',
+          text: m.content
+        }));
+        setSessions((prev) =>
+          prev.map((s) => (s.id === sessionId ? { ...s, messages: formattedMsgs } : s))
+        );
+      }
+    } catch (e) {
+      console.warn('Failed to load session details from backend:', e);
+    }
+  };
+
+  const handleCreateNewChat = async () => {
+    let newId = `session-${Date.now()}`;
+    let newTitle = `Новый диалог ${sessions.length + 1}`;
+
+    if (user) {
+      try {
+        const res = await aiService.createSession(newTitle);
+        if (res && res.id) {
+          newId = res.id;
+          newTitle = res.title || newTitle;
+        }
+      } catch (err) {
+        console.warn('Create backend session fallback:', err);
+      }
+    }
+
     const newSession: AIChatSession = {
-      id: `session-${Date.now()}`,
-      title: `Диалог ${sessions.length + 1}`,
+      id: newId,
+      title: newTitle,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       messages: [
         {
           id: `${Date.now()}`,
           sender: 'ai',
-          text: 'Здравствуйте! Я готов проанализировать новые навыки или вопросы. Что вы ищете?',
-          chips: ['Менеджер по закупкам', 'Разработчик IT', 'HR / Подбор', 'Специалист по продажам'],
+          text: 'Салом! Я ваш персональный HamKor AI Консультант. Чем я могу помочь?',
+          chips: ['🎯 Вакансии по профилю', 'Менеджер по закупкам', 'SMM / Контент-мейкер', 'Python разработчик'],
         }
       ]
     };
@@ -105,8 +169,16 @@ export const AIConsultantPage: React.FC<AIConsultantPageProps> = ({ jobs, onSele
     setActiveSessionId(newSession.id);
   };
 
-  const handleDeleteSession = (sessionId: string, e: React.MouseEvent) => {
+  const handleDeleteSession = async (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+
+    if (user) {
+      try {
+        await aiService.deleteSession(sessionId);
+      } catch (err) {
+        console.warn('Failed to delete backend session:', err);
+      }
+    }
 
     setSessions((prev) => {
       const filtered = prev.filter((s) => s.id !== sessionId);
@@ -135,7 +207,7 @@ export const AIConsultantPage: React.FC<AIConsultantPageProps> = ({ jobs, onSele
                 id: `${Date.now()}`,
                 sender: 'ai',
                 text: 'Чат очищен. Напишите вашу специальность или навыки для поиска подходящих вакансий.',
-                chips: ['Менеджер по закупкам', 'HR / Подбор', 'IT Разработка', 'Юрист'],
+                chips: ['Менеджер по закупкам', 'SMM / Контент', 'IT Разработка', 'Юрист'],
               }
             ]
           };
@@ -200,37 +272,70 @@ export const AIConsultantPage: React.FC<AIConsultantPageProps> = ({ jobs, onSele
   };
 
   const renderTextWithJobLinks = (text: string) => {
-    const titleRegex = /"([^"]+)"/g;
+    // Regex matches double quotes "Title", guillemets «Title», and markdown links [Title](/jobs/ID)
+    const combinedRegex = /"([^"]+)"|«([^»]+)»|\[([^\]]+)\]\(([^)]+)\)/g;
     const parts = [];
     let lastIndex = 0;
     let match;
 
-    while ((match = titleRegex.exec(text)) !== null) {
-      const title = match[1];
+    while ((match = combinedRegex.exec(text)) !== null) {
+      const title = match[1] || match[2] || match[3];
+      const linkUrl = match[4];
       const matchIndex = match.index;
 
       if (matchIndex > lastIndex) {
         parts.push(text.substring(lastIndex, matchIndex));
       }
 
-      const foundJob = jobs.find((j) => j.title.toLowerCase() === title.toLowerCase() || j.title.toLowerCase().includes(title.toLowerCase()));
+      const cleanTitle = title.toLowerCase().replace(/[-_«»"]/g, ' ').trim();
+      let foundJob = jobs.find((j) => {
+        const jTitle = j.title.toLowerCase().replace(/[-_«»"]/g, ' ').trim();
+        return jTitle === cleanTitle || jTitle.includes(cleanTitle) || cleanTitle.includes(jTitle);
+      });
+
+      if (!foundJob && linkUrl) {
+        foundJob = jobs.find((j) => linkUrl.includes(j.id));
+      }
+
+      if (!foundJob && cleanTitle.length >= 3) {
+        const words = cleanTitle.split(' ').filter((w) => w.length >= 3);
+        foundJob = jobs.find((j) => {
+          const jTitle = j.title.toLowerCase();
+          return words.some((w) => jTitle.includes(w));
+        });
+      }
 
       if (foundJob) {
         parts.push(
           <span
             key={matchIndex}
             onClick={() => onSelectJob(foundJob)}
-            className="text-indigo-600 dark:text-indigo-400 font-extrabold hover:underline cursor-pointer bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-200 dark:border-indigo-800/60 inline-flex items-center gap-1 my-0.5"
+            className="text-indigo-600 dark:text-indigo-400 font-extrabold hover:underline cursor-pointer bg-indigo-50 dark:bg-indigo-950/70 px-2 py-0.5 rounded-lg border border-indigo-200 dark:border-indigo-800 inline-flex items-center gap-1 my-0.5 transition-all hover:scale-105 shadow-xs"
+            title={`Открыть вакансию: ${foundJob.title}`}
           >
+            <Briefcase className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
             <span>"{title}"</span>
-            <ArrowUpRight className="w-3 h-3 text-indigo-600 dark:text-indigo-400" />
+            <ArrowUpRight className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
           </span>
         );
       } else {
-        parts.push(`"${title}"`);
+        parts.push(
+          <span
+            key={matchIndex}
+            onClick={() => {
+              const matches = findMatchingJobsDynamic(title);
+              if (matches.length > 0) onSelectJob(matches[0]);
+            }}
+            className="text-indigo-600 dark:text-indigo-400 font-bold hover:underline cursor-pointer bg-indigo-50/50 dark:bg-indigo-950/40 px-1.5 py-0.5 rounded border border-indigo-200/60 dark:border-indigo-800/40 inline-flex items-center gap-1 my-0.5"
+            title={`Посмотреть вакансию ${title}`}
+          >
+            <span>"{title}"</span>
+            <ArrowUpRight className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+          </span>
+        );
       }
 
-      lastIndex = titleRegex.lastIndex;
+      lastIndex = combinedRegex.lastIndex;
     }
 
     if (lastIndex < text.length) {
@@ -304,7 +409,7 @@ export const AIConsultantPage: React.FC<AIConsultantPageProps> = ({ jobs, onSele
         content: m.text,
       }));
 
-      const response = await aiService.askCareerConsultant(userMsgText, historyForApi, userProfile);
+      const response = await aiService.askCareerConsultant(userMsgText, historyForApi, userProfile, activeSessionId);
       const aiResponseText = response?.result || response?.response || response?.text || response?.message || response;
 
       const aiMessage: AIMessage = {
@@ -370,7 +475,7 @@ export const AIConsultantPage: React.FC<AIConsultantPageProps> = ({ jobs, onSele
               return (
                 <div
                   key={session.id}
-                  onClick={() => setActiveSessionId(session.id)}
+                  onClick={() => handleSelectSession(session.id)}
                   className={`p-3 rounded-xl cursor-pointer transition-all border flex items-center justify-between group ${
                     isSelected
                       ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'

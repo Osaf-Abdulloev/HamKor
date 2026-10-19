@@ -36,8 +36,15 @@ class User(Base, TimestampMixin):
 
     # Telegram Bot Integration fields
     telegram_chat_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
-    telegram_username: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    telegram_link_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    telegram_username: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    telegram_user_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    telegram_is_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    telegram_linked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    telegram_link_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    telegram_link_code_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    telegram_notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    telegram_last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    telegram_last_promotional_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     worker_profile: Mapped[Optional["WorkerProfile"]] = relationship("WorkerProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     company: Mapped[Optional["Company"]] = relationship("Company", back_populates="employer", uselist=False, cascade="all, delete-orphan")
@@ -56,6 +63,8 @@ class User(Base, TimestampMixin):
     cv_documents: Mapped[List["CVDocument"]] = relationship("CVDocument", back_populates="user", cascade="all, delete-orphan")
     profile_ai_suggestions: Mapped[List["ProfileAISuggestion"]] = relationship("ProfileAISuggestion", back_populates="user", cascade="all, delete-orphan")
     profile_change_history: Mapped[List["ProfileChangeHistory"]] = relationship("ProfileChangeHistory", foreign_keys="[ProfileChangeHistory.user_id]", back_populates="user", cascade="all, delete-orphan")
+    memories: Mapped[List["UserMemory"]] = relationship("UserMemory", back_populates="user", cascade="all, delete-orphan")
+    telegram_logs: Mapped[List["TelegramNotificationLog"]] = relationship("TelegramNotificationLog", back_populates="user", cascade="all, delete-orphan")
 
     @property
     def company_name(self) -> Optional[str]:
@@ -74,10 +83,33 @@ class UserSettings(Base, TimestampMixin):
     timezone: Mapped[str] = mapped_column(String(50), default="Asia/Dushanbe", nullable=False)
     email_notifications: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     push_notifications: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    telegram_notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    telegram_job_recommendations_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    telegram_messages_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    telegram_system_notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    telegram_promotional_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     theme: Mapped[str] = mapped_column(String(20), default="light", nullable=False)
     extra_preferences: Mapped[Optional[dict]] = mapped_column(JSONType, nullable=True)
 
     user: Mapped["User"] = relationship("User", back_populates="user_settings")
+
+
+class TelegramNotificationLog(Base, TimestampMixin):
+    __tablename__ = "telegram_notification_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    chat_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    notification_type: Mapped[str] = mapped_column(String(50), default="system", nullable=False, index=True)
+    channel: Mapped[str] = mapped_column(String(20), default="telegram", nullable=False)
+    status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False, index=True)
+    message_text: Mapped[str] = mapped_column(Text, nullable=False)
+    telegram_message_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[Optional["User"]] = relationship("User", back_populates="telegram_logs")
+
 
 class Skill(Base):
     __tablename__ = "skills"
@@ -198,6 +230,11 @@ class Job(Base, TimestampMixin):
     external_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     external_company_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     external_company_logo: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    raw_data: Mapped[Optional[dict]] = mapped_column(JSONType, nullable=True)
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    first_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    job_group_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
 
     company: Mapped[Optional["Company"]] = relationship("Company", back_populates="jobs")
     applications: Mapped[List["Application"]] = relationship("Application", back_populates="job", cascade="all, delete-orphan")
@@ -234,12 +271,31 @@ class Application(Base, TimestampMixin):
     worker: Mapped["User"] = relationship("User", back_populates="applications")
     resume: Mapped[Optional["Resume"]] = relationship("Resume")
     status_history: Mapped[List["ApplicationStatusHistory"]] = relationship("ApplicationStatusHistory", back_populates="application", cascade="all, delete-orphan", lazy="selectin")
+    employer_messages: Mapped[List["EmployerMessage"]] = relationship("EmployerMessage", back_populates="application", cascade="all, delete-orphan", lazy="selectin")
 
     __table_args__ = (
         UniqueConstraint('job_id', 'worker_id', name='uq_job_worker_application'),
         Index('idx_application_worker_status', 'worker_id', 'status', 'created_at'),
         Index('idx_application_job_status', 'job_id', 'status', 'created_at'),
     )
+
+class EmployerMessage(Base, TimestampMixin):
+    __tablename__ = "employer_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    application_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("applications.id", ondelete="CASCADE"), nullable=True, index=True)
+    employer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    candidate_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    recipient_email: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False) # pending, sending, sent, failed
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    application: Mapped[Optional["Application"]] = relationship("Application", back_populates="employer_messages")
+    employer: Mapped["User"] = relationship("User", foreign_keys=[employer_id])
+    candidate: Mapped["User"] = relationship("User", foreign_keys=[candidate_id])
 
 class ApplicationStatusHistory(Base):
     __tablename__ = "application_status_history"
@@ -267,6 +323,37 @@ class SavedJob(Base, TimestampMixin):
 
     __table_args__ = (
         UniqueConstraint('user_id', 'job_id', name='uq_user_saved_job'),
+    )
+
+class JobMatch(Base, TimestampMixin):
+    __tablename__ = "job_matches"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    match_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True)
+    position_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    skill_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    salary_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    location_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    
+    commute_estimate: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    distance_estimate: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    matched_reasons: Mapped[Optional[dict]] = mapped_column(JSONType, nullable=True)
+    matched_skills: Mapped[Optional[dict]] = mapped_column(JSONType, nullable=True)
+    missing_skills: Mapped[Optional[dict]] = mapped_column(JSONType, nullable=True)
+    
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    is_stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+
+    user: Mapped["User"] = relationship("User")
+    job: Mapped["Job"] = relationship("Job")
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'job_id', name='uq_user_job_match'),
+        Index('idx_job_match_user_score', 'user_id', 'match_score'),
+        Index('idx_job_match_stale', 'user_id', 'is_stale'),
     )
 
 class Favorite(Base, TimestampMixin):
@@ -389,6 +476,17 @@ class AIGeneratedCV(Base, TimestampMixin):
     cv_text: Mapped[str] = mapped_column(Text, nullable=False)
 
     user: Mapped["User"] = relationship("User", back_populates="ai_cvs")
+
+class UserMemory(Base, TimestampMixin):
+    __tablename__ = "user_memories"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    key: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    importance: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    user: Mapped["User"] = relationship("User", back_populates="memories")
 
 class AuditLog(Base, TimestampMixin):
     __tablename__ = "audit_logs"

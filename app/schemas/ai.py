@@ -7,6 +7,7 @@ class ChatHistoryMessage(BaseModel):
 
 class AIRequest(BaseModel):
     prompt: str
+    session_id: Optional[str] = None
     context: Optional[Any] = None
     user_profile: Optional[Any] = None
     history: Optional[List[ChatHistoryMessage]] = None
@@ -14,6 +15,7 @@ class AIRequest(BaseModel):
 
 class AIResponse(BaseModel):
     result: str
+    session_id: Optional[str] = None
     tool_calls: Optional[Any] = None
 
 class ResumeAnalysisRequest(BaseModel):

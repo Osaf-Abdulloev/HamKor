@@ -144,17 +144,24 @@ class ApplicationService:
 
         # 1. Verify Job Ownership (IDOR Prevention)
         company = await self.company_repo.get_by_employer_id(employer_id)
-        if application.job and application.job.company_id:
-            if not company or application.job.company_id != company.id:
-                raise ForbiddenException("У вас нет прав для изменения статуса этого отклика")
+        is_authorized = False
+        if company and application.job and application.job.company_id == company.id:
+            is_authorized = True
+        elif application.job and application.job.external_source == f"employer_{employer_id}":
+            is_authorized = True
+        elif company and company.user_id == employer_id:
+            is_authorized = True
+        else:
+            emp_jobs, _ = await self.job_repo.get_employer_jobs(employer_id)
+            if any(j.id == application.job_id for j in emp_jobs):
+                is_authorized = True
 
-        # 2. Enforce State Machine Transitions
+        if not is_authorized and application.job and application.job.company_id:
+            raise ForbiddenException("У вас нет прав для изменения статуса этого отклика")
+
+        # 2. Enforce State Machine Transitions (Worker cancellation remains final)
         curr = application.status
-        if curr == ApplicationStatus.ACCEPTED and new_status == ApplicationStatus.REJECTED:
-            raise ConflictException("Отклик уже принят. Изменение статуса на 'Отклонён' недопустимо.")
-        if curr == ApplicationStatus.REJECTED and new_status == ApplicationStatus.ACCEPTED:
-            raise ConflictException("Отклик уже отклонён. Изменение статуса на 'Принят' недопустимо.")
-        if curr == ApplicationStatus.CANCELLED:
+        if curr == ApplicationStatus.CANCELLED and new_status != ApplicationStatus.CANCELLED:
             raise ConflictException("Отклик был отменён соискателем.")
 
         now_dt = datetime.now(timezone.utc)

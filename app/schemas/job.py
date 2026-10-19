@@ -50,6 +50,8 @@ class JobOut(BaseModel):
     external_url: Optional[str] = None
     external_company_name: Optional[str] = None
     external_company_logo: Optional[str] = None
+    published_at: Optional[datetime] = None
+    requirements: Optional[dict] = None
 
     # Dynamic backend profile match fields
     match_score: Optional[int] = None
@@ -60,5 +62,9 @@ class JobOut(BaseModel):
 
     # Application status for current authenticated worker
     has_applied: Optional[bool] = False
+
+    # Saved / Favorite status for current authenticated user
+    is_saved: Optional[bool] = False
+    is_favorite: Optional[bool] = False
 
     model_config = ConfigDict(from_attributes=True)

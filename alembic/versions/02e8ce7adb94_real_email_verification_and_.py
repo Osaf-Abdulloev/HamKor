@@ -26,12 +26,12 @@ def upgrade() -> None:
                type_=sa.Enum('DRAFT', 'PUBLISHED', 'ARCHIVED', name='resumestatus'),
                existing_nullable=False)
     op.alter_column('resumes', 'content',
-               existing_type=postgresql.JSON(astext_type=sa.Text()),
-               type_=sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), 'postgresql'),
+               existing_type=sa.JSON(),
+               type_=sa.JSON(),
                existing_nullable=False)
     op.alter_column('resumes', 'ai_suggestions',
-               existing_type=postgresql.JSON(astext_type=sa.Text()),
-               type_=sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), 'postgresql'),
+               existing_type=sa.JSON(),
+               type_=sa.JSON(),
                existing_nullable=True)
     op.add_column('users', sa.Column('telegram_chat_id', sa.String(length=100), nullable=True))
     op.add_column('users', sa.Column('telegram_username', sa.String(length=100), nullable=True))

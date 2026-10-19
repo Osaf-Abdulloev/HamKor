@@ -33,12 +33,16 @@ export interface Job {
   external_url?: string;
   external_company_name?: string;
   external_company_logo?: string;
+  published_at?: string;
+  requirements?: any;
   match_score?: number;
   commute_estimate?: string;
   distance_estimate?: string;
   matched_reasons?: string[];
   matched_skills?: string[];
   has_applied?: boolean;
+  is_saved?: boolean;
+  is_favorite?: boolean;
 }
 
 

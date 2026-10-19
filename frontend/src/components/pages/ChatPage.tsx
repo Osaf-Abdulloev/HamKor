@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Search, Send, Mic, Square, X, Play, Pause, 
-  Image as ImageIcon, Volume2, User as UserIcon, RefreshCw, Radio, MessageSquare, Trash2
+  Image as ImageIcon, Volume2, User as UserIcon, RefreshCw, Radio, MessageSquare, Trash2, ChevronLeft
 } from 'lucide-react';
 import { chatService, ChatConversation, ChatMessage } from '../../services/chatService';
 
@@ -346,10 +346,10 @@ export const ChatPage: React.FC<ChatPageProps> = ({ user, onOpenAuth, initialRec
   const activeChatTitle = otherParticipant?.full_name || otherParticipant?.email || 'Собеседник';
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-[calc(100vh-8.5rem)] relative">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-[calc(100vh-10rem)] md:h-[calc(100vh-8.5rem)] relative">
       
       {/* ── LEFT PANEL: REAL HUMAN CONVERSATION LIST ONLY ── */}
-      <div className="lg:col-span-4 ref-card p-4 flex flex-col gap-4 overflow-y-auto">
+      <div className={`lg:col-span-4 ref-card p-4 flex flex-col gap-4 overflow-y-auto ${activeChatId ? 'hidden lg:flex' : 'flex'}`}>
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-extrabold text-slate-900 dark:text-slate-100">Сообщения (Чат)</h2>
           <div className="flex items-center gap-1.5 text-[11px] font-bold">
@@ -440,18 +440,25 @@ export const ChatPage: React.FC<ChatPageProps> = ({ user, onOpenAuth, initialRec
       </div>
 
       {/* ── RIGHT PANEL: ACTIVE REAL CHAT THREAD ── */}
-      <div className="lg:col-span-8 ref-card p-5 flex flex-col justify-between h-full relative overflow-hidden">
+      <div className={`lg:col-span-8 ref-card p-4 sm:p-5 flex flex-col justify-between h-full relative overflow-hidden ${!activeChatId ? 'hidden lg:flex' : 'flex'}`}>
         
         {activeChatId ? (
           <>
             {/* Header */}
-            <div className="pb-4 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs font-bold text-xs">
+            <div className="pb-3 sm:pb-4 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2 sm:gap-3">
+                <button
+                  onClick={() => setActiveChatId(null)}
+                  className="lg:hidden p-2 -ml-1 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+                  title="Назад к списку чатов"
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
+                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs font-bold text-xs">
                   {otherParticipant?.full_name ? otherParticipant.full_name.substring(0, 2).toUpperCase() : <UserIcon className="w-5 h-5" />}
                 </div>
                 <div>
-                  <h3 className="text-sm font-extrabold text-slate-900 dark:text-slate-100">{activeChatTitle}</h3>
+                  <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-slate-100">{activeChatTitle}</h3>
                   <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> В сети
                   </span>
@@ -460,11 +467,11 @@ export const ChatPage: React.FC<ChatPageProps> = ({ user, onOpenAuth, initialRec
 
               <button
                 onClick={() => handleDeleteChat(activeChatId)}
-                className="px-3.5 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-600 dark:hover:bg-rose-600 hover:text-white text-rose-600 dark:text-rose-400 text-xs font-extrabold flex items-center gap-1.5 transition-all border border-rose-200 dark:border-rose-900/60 active:scale-95 shadow-2xs"
+                className="px-2.5 sm:px-3.5 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-600 dark:hover:bg-rose-600 hover:text-white text-rose-600 dark:text-rose-400 text-xs font-extrabold flex items-center gap-1.5 transition-all border border-rose-200 dark:border-rose-900/60 active:scale-95 shadow-2xs"
                 title="Удалить чат со всеми сообщениями"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Удалить чат</span>
+                <span className="hidden sm:inline">Удалить чат</span>
               </button>
             </div>
 

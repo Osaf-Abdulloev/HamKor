@@ -118,31 +118,41 @@ export const EmployerProfilePage: React.FC<EmployerProfilePageProps> = ({
       const logoUrl = (profile.logo_url || profile.avatar_url) ? (profile.logo_url || profile.avatar_url) : undefined;
 
       // 1. Update Company Profile in PostgreSQL Database
-      const updatedCp = await profileService.updateCompanyProfile({
-        company_name: profile.company_name,
-        inn: profile.inn || undefined,
-        industry: profile.industry || undefined,
-        description: profile.company_description || undefined,
-        website: profile.website || undefined,
-        contact_email: profile.contact_email || undefined,
-        contact_phone: profile.contact_phone || undefined,
-        address: profile.address || profile.location || undefined,
-        logo_url: logoUrl,
-        employee_count: (profile as any).employee_count || undefined,
-        target_position: profile.target_position || undefined,
-        required_skills: profile.required_skills,
-        min_experience_years: profile.min_experience_years || undefined,
-        offered_salary_min: Number.isNaN(cleanSalaryMin) ? undefined : cleanSalaryMin,
-        offered_salary_max: Number.isNaN(cleanSalaryMax) ? undefined : cleanSalaryMax
-      });
+      let updatedCp: any = null;
+      try {
+        updatedCp = await profileService.updateCompanyProfile({
+          company_name: profile.company_name,
+          inn: profile.inn || undefined,
+          industry: profile.industry || undefined,
+          description: profile.company_description || undefined,
+          website: profile.website || undefined,
+          contact_email: profile.contact_email || undefined,
+          contact_phone: profile.contact_phone || undefined,
+          address: profile.address || profile.location || undefined,
+          logo_url: logoUrl,
+          employee_count: (profile as any).employee_count ? String((profile as any).employee_count) : undefined,
+          target_position: profile.target_position || undefined,
+          required_skills: profile.required_skills,
+          min_experience_years: profile.min_experience_years ? String(profile.min_experience_years) : undefined,
+          offered_salary_min: Number.isNaN(cleanSalaryMin) ? undefined : cleanSalaryMin,
+          offered_salary_max: Number.isNaN(cleanSalaryMax) ? undefined : cleanSalaryMax
+        });
+      } catch (cpErr) {
+        console.error('Error updating company profile in DB:', cpErr);
+      }
 
       // 2. Update User Details in PostgreSQL Database
-      const updatedUser = await profileService.updateUser({
-        full_name: profile.company_name,
-        avatar_url: logoUrl,
-        phone: profile.contact_phone || undefined,
-        city: profile.location || undefined
-      });
+      let updatedUser: any = null;
+      try {
+        updatedUser = await profileService.updateUser({
+          full_name: profile.company_name,
+          avatar_url: logoUrl,
+          phone: profile.contact_phone || undefined,
+          city: profile.location || undefined
+        });
+      } catch (uErr) {
+        console.error('Error updating user in DB:', uErr);
+      }
 
       // Update local user in localStorage & trigger event so Navbar updates immediately
       if (updatedUser) {
@@ -194,32 +204,93 @@ export const EmployerProfilePage: React.FC<EmployerProfilePageProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // 1. Convert to base64 preview immediately so UI shows the uploaded picture instantly
     const reader = new FileReader();
     reader.onloadend = async () => {
       const base64String = reader.result as string;
+
+      // 1. Set instant local preview
       setProfile((prev) => ({
         ...prev,
         logo_url: base64String,
         avatar_url: base64String
       }));
 
-      // 2. Upload file to backend server storage (/api/v1/files/upload)
+      // 2. Attempt dedicated multipart upload
       try {
-        const uploadRes = await fileService.uploadFile(file, 'logos');
-        if (uploadRes && (uploadRes.url || uploadRes.file_url)) {
-          const uploadedUrl = uploadRes.url || uploadRes.file_url;
+        const updatedCompany = await profileService.uploadCompanyLogo(file);
+        const serverLogoUrl = updatedCompany?.logo_url || '';
+
+        if (serverLogoUrl) {
           setProfile((prev) => ({
             ...prev,
-            logo_url: uploadedUrl,
-            avatar_url: uploadedUrl
+            logo_url: serverLogoUrl,
+            avatar_url: serverLogoUrl
           }));
+
+          const storedUser = localStorage.getItem('ergon_user');
+          if (storedUser) {
+            try {
+              const parsed = JSON.parse(storedUser);
+              localStorage.setItem('ergon_user', JSON.stringify({ ...parsed, avatar_url: serverLogoUrl }));
+            } catch (e) {}
+          }
+          window.dispatchEvent(new Event('ergon_user_updated'));
+          window.dispatchEvent(new Event('ergon_profile_updated'));
+          return;
         }
-      } catch (err) {
-        console.warn('Backend file upload failed, falling back to base64 string:', err);
+      } catch (err: any) {
+        console.warn('Multipart upload failed, using automatic base64 persistence fallback:', err);
+      }
+
+      // 3. Fallback: Save base64 string to PostgreSQL via profileService
+      try {
+        const updatedCompany = await profileService.updateCompanyProfile({ logo_url: base64String });
+        await profileService.updateUser({ avatar_url: base64String });
+        const savedUrl = updatedCompany?.logo_url || base64String;
+
+        setProfile((prev) => ({
+          ...prev,
+          logo_url: savedUrl,
+          avatar_url: savedUrl
+        }));
+
+        const storedUser = localStorage.getItem('ergon_user');
+        if (storedUser) {
+          try {
+            const parsed = JSON.parse(storedUser);
+            localStorage.setItem('ergon_user', JSON.stringify({ ...parsed, avatar_url: savedUrl }));
+          } catch (e) {}
+        }
+        window.dispatchEvent(new Event('ergon_user_updated'));
+        window.dispatchEvent(new Event('ergon_profile_updated'));
+      } catch (fallbackErr) {
+        console.error('Failed to persist company photo:', fallbackErr);
       }
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleDeleteLogo = async () => {
+    try {
+      await profileService.deleteCompanyLogo();
+      setProfile((prev) => ({
+        ...prev,
+        logo_url: '',
+        avatar_url: ''
+      }));
+
+      const storedUser = localStorage.getItem('ergon_user');
+      if (storedUser) {
+        try {
+          const parsed = JSON.parse(storedUser);
+          localStorage.setItem('ergon_user', JSON.stringify({ ...parsed, avatar_url: '' }));
+        } catch (e) {}
+      }
+      window.dispatchEvent(new Event('ergon_user_updated'));
+      window.dispatchEvent(new Event('ergon_profile_updated'));
+    } catch (err) {
+      console.warn('Failed to delete logo from backend:', err);
+    }
   };
 
   const handleAddSkill = () => {
@@ -363,8 +434,8 @@ export const EmployerProfilePage: React.FC<EmployerProfilePageProps> = ({
                     <Building2 className="w-10 h-10 text-indigo-400" />
                   )}
                 </div>
-                <label className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center rounded-2xl cursor-pointer transition-opacity text-white text-xs font-bold">
-                  Выбрать
+                <label className="absolute inset-0 bg-slate-950/50 opacity-0 group-hover:opacity-100 flex items-center justify-center rounded-2xl cursor-pointer transition-opacity text-white text-xs font-bold">
+                  {(profile.logo_url || profile.avatar_url) ? 'Изменить' : 'Выбрать'}
                   <input type="file" accept="image/*" onChange={handleLogoFileUpload} className="hidden" />
                 </label>
               </div>
@@ -373,21 +444,33 @@ export const EmployerProfilePage: React.FC<EmployerProfilePageProps> = ({
                 <label className="block text-xs font-black text-slate-800 dark:text-slate-200">
                   Логотип / Фото компании
                 </label>
-                <div className="flex flex-col sm:flex-row items-center gap-3">
-                  <label className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer transition-all shrink-0">
-                    Загрузить фото
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <label className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer transition-all shrink-0 flex items-center gap-1.5 shadow-sm active:scale-95">
+                    <span>{(profile.logo_url || profile.avatar_url) ? 'Изменить фото' : 'Загрузить фото'}</span>
                     <input type="file" accept="image/*" onChange={handleLogoFileUpload} className="hidden" />
                   </label>
+
+                  {(profile.logo_url || profile.avatar_url) && (
+                    <button
+                      type="button"
+                      onClick={handleDeleteLogo}
+                      className="px-3.5 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800 text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 active:scale-95"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Удалить фото</span>
+                    </button>
+                  )}
+
                   <input
                     type="text"
                     placeholder="Или вставьте URL картинки логотипа"
                     value={profile.logo_url || ''}
                     onChange={(e) => setProfile({ ...profile, logo_url: e.target.value, avatar_url: e.target.value })}
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold outline-none focus:border-indigo-500 text-slate-900 dark:text-slate-100"
+                    className="flex-1 min-w-[200px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold outline-none focus:border-indigo-500 text-slate-900 dark:text-slate-100"
                   />
                 </div>
                 <p className="text-[10px] text-slate-400 font-medium">
-                  Рекомендуемый формат: PNG, JPG или WebP до 5 МБ.
+                  Вы можете заменить текущее фото на новое или вставить ссылку. Формат: PNG, JPG, WebP до 5 МБ.
                 </p>
               </div>
             </div>
@@ -411,15 +494,16 @@ export const EmployerProfilePage: React.FC<EmployerProfilePageProps> = ({
 
               {/* Company INN */}
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                  ИНН компании
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                  ИНН компании <span className="text-amber-600 dark:text-amber-400 font-medium text-[10px] bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded-full border border-amber-200 dark:border-amber-800">🔒 Неизменяемое поле</span>
                 </label>
                 <input
                   type="text"
-                  placeholder="Например: 040012345"
+                  readOnly
+                  disabled
+                  placeholder="ИНН не указан"
                   value={profile.inn || ''}
-                  onChange={(e) => setProfile({ ...profile, inn: e.target.value })}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-bold outline-none focus:border-indigo-500 focus:bg-white dark:focus:bg-slate-900 text-slate-900 dark:text-slate-100 transition-all"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800/60 text-xs font-bold outline-none text-slate-500 dark:text-slate-400 cursor-not-allowed select-none transition-all"
                 />
               </div>
 

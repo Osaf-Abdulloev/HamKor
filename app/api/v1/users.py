@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional
-from fastapi import APIRouter, Depends, Query, status, HTTPException
+from fastapi import APIRouter, Depends, Query, status, HTTPException, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.session import get_db
 from app.schemas.user import UserOut, UserUpdate, UserSidebarProfileOut
@@ -33,6 +33,20 @@ async def get_my_sidebar_profile(
 async def update_me(data: UserUpdate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     service = UserService(db)
     return await service.update_user(current_user.id, data)
+
+from fastapi import APIRouter, Depends, Query, status, HTTPException, UploadFile, File
+
+@router.post("/me/avatar", response_model=UserOut)
+async def upload_my_avatar(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    from app.utils.storage import storage_service
+    rel_path, _ = await storage_service.save_file(file, folder="avatars")
+    file_url = f"/api/v1/files/{rel_path}"
+    service = UserService(db)
+    return await service.update_user(current_user.id, UserUpdate(avatar_url=file_url))
 
 @router.get("/me/settings")
 async def get_my_settings(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -179,6 +193,23 @@ async def get_my_company_profile(current_user: User = Depends(require_roles([Use
 async def update_my_company_profile(data: CompanyUpdate, current_user: User = Depends(require_roles([UserRole.EMPLOYER])), db: AsyncSession = Depends(get_db)):
     service = UserService(db)
     return await service.update_company_profile(current_user.id, data)
+
+@router.post("/me/company-profile/logo", response_model=CompanyOut)
+async def upload_my_company_logo(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_roles([UserRole.EMPLOYER])),
+    db: AsyncSession = Depends(get_db)
+):
+    service = UserService(db)
+    return await service.update_company_logo(current_user.id, file)
+
+@router.delete("/me/company-profile/logo", response_model=CompanyOut)
+async def delete_my_company_logo(
+    current_user: User = Depends(require_roles([UserRole.EMPLOYER])),
+    db: AsyncSession = Depends(get_db)
+):
+    service = UserService(db)
+    return await service.delete_company_logo(current_user.id)
 
 @router.get("/workers", response_model=PaginatedResponse[WorkerProfileOut])
 async def search_workers(

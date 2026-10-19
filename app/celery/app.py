@@ -62,5 +62,9 @@ celery_app.conf.update(
             "task": "app.celery.tasks.sync_telegram_vacancies_task",
             "schedule": 3600.0,
         },
+        "send-telegram-job-recommendations-daily": {
+            "task": "app.celery.tasks.send_periodic_telegram_recommendations_task",
+            "schedule": 86400.0, # 24 hours
+        },
     },
 )

@@ -38,6 +38,18 @@ export const ResumeHubPage: React.FC<ResumeHubPageProps> = ({ user, onOpenAuth }
     try {
       const data = await resumeService.getResumes();
       setResumes(data);
+
+      const pendingEditId = localStorage.getItem('ergon_edit_resume_id');
+      if (pendingEditId) {
+        localStorage.removeItem('ergon_edit_resume_id');
+        const found = data.find((r) => r.id === pendingEditId);
+        if (found) {
+          setActiveResume(found);
+          setActiveResumeId(found.id);
+        } else {
+          setActiveResumeId(pendingEditId);
+        }
+      }
     } catch (err) {
       console.error('Failed to load resumes:', err);
     } finally {

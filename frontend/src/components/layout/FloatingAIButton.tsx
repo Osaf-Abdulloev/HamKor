@@ -11,7 +11,7 @@ export const FloatingAIButton: React.FC<FloatingAIButtonProps> = ({ onNavigateTo
   const [showQuickTooltip, setShowQuickTooltip] = useState(false);
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end pointer-events-auto">
+    <div className="fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom,0px))] md:bottom-6 right-4 md:right-6 z-50 flex flex-col items-end pointer-events-auto">
       {/* Quick Hover Tooltip */}
       {showQuickTooltip && (
         <div className="mb-3 p-4 bg-slate-900/95 dark:bg-slate-800/95 backdrop-blur-xl text-white rounded-2xl shadow-2xl border border-indigo-500/30 max-w-xs animate-in fade-in slide-in-from-bottom-2 duration-200">

@@ -43,7 +43,7 @@ def upgrade() -> None:
     sa.Column('action', sa.String(length=100), nullable=False),
     sa.Column('entity_type', sa.String(length=100), nullable=False),
     sa.Column('entity_id', sa.String(length=100), nullable=True),
-    sa.Column('details', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('details', sa.JSON(), nullable=True),
     sa.Column('ip_address', sa.String(length=50), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),

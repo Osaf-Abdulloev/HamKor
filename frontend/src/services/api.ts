@@ -21,6 +21,9 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  if (config.data instanceof FormData) {
+    delete config.headers['Content-Type'];
+  }
   return config;
 });
 
@@ -113,10 +116,14 @@ api.interceptors.response.use(
 export const jobService = {
   getJobs: async (params?: {
     title?: string;
+    search?: string;
     category?: string;
     location?: string;
     employment_type?: string;
     salary_min?: number;
+    salary_max?: number;
+    source?: string;
+    sort_by_match?: boolean;
     page?: number;
     limit?: number;
   }): Promise<PaginatedResponse<Job>> => {
@@ -165,6 +172,16 @@ export const jobService = {
 
   evaluateJobMatch: async (jobId: string) => {
     const response = await api.get(`/jobs/${jobId}/match`);
+    return response.data;
+  },
+
+  saveJob: async (jobId: string) => {
+    const response = await api.post(`/jobs/${jobId}/favorite`);
+    return response.data;
+  },
+
+  unsaveJob: async (jobId: string) => {
+    const response = await api.delete(`/jobs/${jobId}/favorite`);
     return response.data;
   }
 };
@@ -345,7 +362,7 @@ export const applicationService = {
 
   getEmployerApplications: async (statusFilter?: string, jobId?: string) => {
     const params: any = {};
-    if (statusFilter && statusFilter !== 'all') params.status = statusFilter;
+    if (statusFilter && statusFilter !== 'all') params.status = statusFilter.toLowerCase();
     if (jobId) params.job_id = jobId;
     const response = await api.get('/applications/employer', { params });
     return response.data;
@@ -353,7 +370,7 @@ export const applicationService = {
 
   updateStatus: async (applicationId: string, status: string, employerFeedback?: string) => {
     const response = await api.patch(`/applications/${applicationId}/status`, {
-      status,
+      status: status.toLowerCase(),
       employer_feedback: employerFeedback
     });
     return response.data;
@@ -361,6 +378,16 @@ export const applicationService = {
 
   contactCandidate: async (applicationId: string) => {
     const response = await api.post(`/applications/${applicationId}/contact`);
+    return response.data;
+  },
+
+  sendApplicationEmail: async (applicationId: string, data: { subject: string; message: string }) => {
+    const response = await api.post(`/applications/${applicationId}/send-email`, data);
+    return response.data;
+  },
+
+  getApplicationMessages: async (applicationId: string) => {
+    const response = await api.get(`/applications/${applicationId}/messages`);
     return response.data;
   }
 };
@@ -371,8 +398,34 @@ export const aiService = {
     return response.data;
   },
   
-  askCareerConsultant: async (message: string, history?: any[], userProfile?: any) => {
-    const response = await api.post('/ai/chat', { prompt: message, message, history, user_profile: userProfile });
+  askCareerConsultant: async (message: string, history?: any[], userProfile?: any, sessionId?: string) => {
+    const response = await api.post('/ai/chat', { 
+      prompt: message, 
+      message, 
+      history, 
+      user_profile: userProfile,
+      session_id: sessionId 
+    });
+    return response.data;
+  },
+
+  createSession: async (title?: string) => {
+    const response = await api.post('/ai/sessions', null, { params: { title } });
+    return response.data;
+  },
+
+  getSessions: async () => {
+    const response = await api.get('/ai/sessions');
+    return response.data;
+  },
+
+  getSessionDetail: async (sessionId: string) => {
+    const response = await api.get(`/ai/sessions/${sessionId}`);
+    return response.data;
+  },
+
+  deleteSession: async (sessionId: string) => {
+    const response = await api.delete(`/ai/sessions/${sessionId}`);
     return response.data;
   }
 };
@@ -471,6 +524,18 @@ export const profileService = {
     return response.data;
   },
 
+  uploadCompanyLogo: async (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await api.post('/users/me/company-profile/logo', formData);
+    return response.data;
+  },
+
+  deleteCompanyLogo: async () => {
+    const response = await api.delete('/users/me/company-profile/logo');
+    return response.data;
+  },
+
   updateUser: async (data: any) => {
     const response = await api.put('/users/me', data);
     return response.data;
@@ -552,18 +617,35 @@ export const notificationService = {
 };
 
 export const telegramService = {
-  getTelegramLink: async () => {
-    const response = await api.post('/users/me/telegram-link');
+  getTelegramStatus: async () => {
+    const response = await api.get('/profile/telegram');
+    return response.data;
+  },
+
+  getTelegramLink: async (data?: { telegram_username?: string }) => {
+    const response = await api.post('/profile/telegram/connect', data || {});
     return response.data;
   },
 
   connectTelegram: async (data: { telegram_chat_id?: string; telegram_username?: string }) => {
-    const response = await api.post('/users/me/telegram-connect', data);
+    const response = await api.post('/profile/telegram/connect', data);
     return response.data;
   },
 
   unlinkTelegram: async () => {
-    const response = await api.post('/users/me/telegram-unlink');
+    const response = await api.post('/profile/telegram/disconnect');
+    return response.data;
+  },
+
+  updateTelegramSettings: async (settings: {
+    telegram_notifications_enabled?: boolean;
+    telegram_job_recommendations_enabled?: boolean;
+    telegram_messages_enabled?: boolean;
+    telegram_system_notifications_enabled?: boolean;
+    telegram_promotional_enabled?: boolean;
+    telegram_username?: string;
+  }) => {
+    const response = await api.patch('/profile/telegram/settings', settings);
     return response.data;
   }
 };
@@ -654,11 +736,26 @@ export const fileService = {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('folder', folder);
-    const response = await api.post<{ id: string; url: string; file_url: string }>('/files/upload', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
+    const response = await api.post<{ id: string; url: string; file_url: string }>('/files/upload', formData);
+    return response.data;
+  },
+
+  uploadAvatar: async (file: File): Promise<any> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await api.post('/users/me/avatar', formData);
+    if (response.data) {
+      const storedUser = localStorage.getItem('ergon_user');
+      if (storedUser) {
+        try {
+          const parsed = JSON.parse(storedUser);
+          const merged = { ...parsed, ...response.data };
+          localStorage.setItem('ergon_user', JSON.stringify(merged));
+          window.dispatchEvent(new Event('ergon_user_updated'));
+          window.dispatchEvent(new Event('ergon_profile_updated'));
+        } catch (e) {}
+      }
+    }
     return response.data;
   }
 };

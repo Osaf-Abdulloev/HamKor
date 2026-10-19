@@ -16,6 +16,10 @@ export const LanguageProvider: React.FC<{ children: ReactNode }> = ({ children }
       if (saved && (saved === 'ru' || saved === 'tj' || saved === 'en')) {
         return saved;
       }
+      // Browser language detection
+      const navLang = navigator.language.toLowerCase();
+      if (navLang.startsWith('tg') || navLang.startsWith('tj')) return 'tj';
+      if (navLang.startsWith('en')) return 'en';
     } catch (e) {
       console.error('Failed to read language:', e);
     }
@@ -26,6 +30,12 @@ export const LanguageProvider: React.FC<{ children: ReactNode }> = ({ children }
     setLanguageState(lang);
     try {
       localStorage.setItem('ergon_language', lang);
+      const token = localStorage.getItem('ergon_token') || localStorage.getItem('ergon_access_token');
+      if (token) {
+        import('../services/api').then(({ api }) => {
+          api.put('/users/me', { language: lang }).catch(() => {});
+        });
+      }
     } catch (e) {
       console.error('Failed to save language:', e);
     }

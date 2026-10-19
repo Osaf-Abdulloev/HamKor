@@ -20,6 +20,7 @@ class UserOut(BaseModel):
     mute_reason: Optional[str] = None
     telegram_chat_id: Optional[str] = None
     telegram_username: Optional[str] = None
+    language: Optional[str] = "ru"
     company_name: Optional[str] = None
     created_at: datetime
 
@@ -31,6 +32,7 @@ class UserUpdate(BaseModel):
     phone: Optional[str] = None
     city: Optional[str] = None
     avatar_url: Optional[str] = None
+    language: Optional[str] = None
 
 class UserSidebarProfileOut(BaseModel):
     user_id: uuid.UUID

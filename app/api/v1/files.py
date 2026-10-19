@@ -1,4 +1,5 @@
 import os
+import mimetypes
 from fastapi import APIRouter, Depends, UploadFile, File, Form, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,13 +19,11 @@ async def upload_file(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    # Read size before writing
-    file.file.seek(0, os.SEEK_END)
-    file_size = file.file.tell()
-    file.file.seek(0)
-
     rel_path, mime_type = await storage_service.save_file(file, folder=folder)
     file_url = f"/api/v1/files/{rel_path}"
+
+    full_disk_path = os.path.join(settings.FILE_STORAGE_PATH, rel_path)
+    file_size = os.path.getsize(full_disk_path) if os.path.exists(full_disk_path) else 0
 
     db_file = FileUpload(
         user_id=current_user.id,
@@ -50,14 +49,18 @@ async def upload_file(
         "file_size": file_size
     }
 
-@router.get("/{folder}/{filename}")
-async def get_file(
-    folder: str,
-    filename: str
-):
-    full_path = os.path.join(settings.FILE_STORAGE_PATH, folder, filename)
-    if not os.path.exists(full_path):
+@router.get("/{file_path:path}")
+async def get_file(file_path: str):
+    # Sanitize path to prevent directory traversal
+    clean_path = os.path.normpath(file_path).lstrip("/\\")
+    if ".." in clean_path:
+        raise NotFoundException("Invalid file path")
+
+    full_path = os.path.abspath(os.path.join(settings.FILE_STORAGE_PATH, clean_path))
+    base_storage_dir = os.path.abspath(settings.FILE_STORAGE_PATH)
+
+    if not full_path.startswith(base_storage_dir) or not os.path.exists(full_path) or not os.path.isfile(full_path):
         raise NotFoundException("File not found")
-    import mimetypes
+
     media_type, _ = mimetypes.guess_type(full_path)
     return FileResponse(full_path, media_type=media_type or "application/octet-stream")

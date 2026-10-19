@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, MapPin, Building2, ExternalLink, CheckCircle2, ShieldAlert, Sparkles, Zap, Clock, Send, FileText } from 'lucide-react';
+import { X, MapPin, Building2, ExternalLink, CheckCircle2, ShieldAlert, Sparkles, Zap, Clock, Send, FileText, Heart } from 'lucide-react';
 import { Job } from '../../types';
 import { evaluateProfileJobMatch, getSavedUserProfile } from '../../services/matchService';
 import { applicationService, jobService } from '../../services/api';
@@ -24,6 +24,28 @@ export const JobDetailModal: React.FC<JobDetailModalProps> = ({ job, onClose, us
   const [appliedSuccess, setAppliedSuccess] = useState(false);
   const [hasAlreadyApplied, setHasAlreadyApplied] = useState<boolean>(job.has_applied || false);
   const [applyError, setApplyError] = useState<string | null>(null);
+
+  const [isSaved, setIsSaved] = useState<boolean>(job.is_saved || job.is_favorite || false);
+  const [isTogglingFavorite, setIsTogglingFavorite] = useState<boolean>(false);
+
+  const handleToggleFavorite = async () => {
+    if (isTogglingFavorite) return;
+    setIsTogglingFavorite(true);
+    const prev = isSaved;
+    setIsSaved(!prev);
+    try {
+      if (prev) {
+        await jobService.unsaveJob(job.id);
+      } else {
+        await jobService.saveJob(job.id);
+      }
+      window.dispatchEvent(new Event('ergon_favorites_updated'));
+    } catch (err) {
+      setIsSaved(prev);
+    } finally {
+      setIsTogglingFavorite(false);
+    }
+  };
 
   const [userResumes, setUserResumes] = useState<Resume[]>([]);
   const [selectedResumeId, setSelectedResumeId] = useState<string>('');
@@ -51,9 +73,9 @@ export const JobDetailModal: React.FC<JobDetailModalProps> = ({ job, onClose, us
   }, [user, job?.id]);
 
 
-  const isExternal = job.is_external || !!job.external_source;
-  const companyName = job.external_company_name || (job as any).company?.company_name || 'Работодатель HamKor';
-  const logoUrl = job.external_company_logo || (job as any).company?.logo_url;
+  const isExternal = job?.is_external || !!job?.external_source;
+  const companyName = job?.external_company_name || (job as any)?.company?.company_name || 'Работодатель HamKor';
+  const logoUrl = job?.external_company_logo || (job as any)?.company?.logo_url;
 
   const formatSalary = () => {
     if (job.salary_min && job.salary_max) {
@@ -174,16 +196,38 @@ export const JobDetailModal: React.FC<JobDetailModalProps> = ({ job, onClose, us
   const displayCommute = backendCommute?.commute_text || commuteEstimate;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 dark:bg-slate-950/80 backdrop-blur-sm animate-fade-in overflow-y-auto">
-      <div className="glass-card w-full max-w-3xl rounded-3xl p-6 sm:p-8 shadow-2xl relative max-h-[90vh] overflow-y-auto border border-white/20 dark:border-slate-800 bg-white dark:bg-slate-900">
-        
-        {/* Close button */}
-        <button
-          onClick={onClose}
-          className="absolute top-5 right-5 p-2 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 transition-all"
-        >
-          <X className="w-5 h-5" />
-        </button>
+    <div 
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/60 dark:bg-slate-950/80 backdrop-blur-sm animate-fade-in overflow-y-auto"
+    >
+      <div 
+        onClick={(e) => e.stopPropagation()}
+        className="glass-card w-full max-w-3xl rounded-t-3xl sm:rounded-3xl p-5 sm:p-8 shadow-2xl relative max-h-[88vh] overflow-y-auto border border-white/20 dark:border-slate-800 bg-white dark:bg-slate-900 animate-in slide-in-from-bottom-6 duration-200"
+      >
+        {/* Mobile Drag Indicator Bar */}
+        <div className="sm:hidden w-12 h-1.5 bg-slate-300 dark:bg-slate-700 rounded-full mx-auto mb-3 shrink-0" />
+
+        {/* Top Header Buttons */}
+        <div className="absolute top-4 right-4 sm:top-5 sm:right-5 flex items-center gap-2">
+          <button
+            onClick={handleToggleFavorite}
+            disabled={isTogglingFavorite}
+            title={isSaved ? "Удалить из избранного" : "Сохранить в избранное"}
+            className={`p-2 rounded-full border transition-all active:scale-95 cursor-pointer ${
+              isSaved
+                ? 'bg-rose-50 dark:bg-rose-950/60 text-rose-600 border-rose-200 dark:border-rose-800'
+                : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-rose-500 border-slate-200 dark:border-slate-700'
+            }`}
+          >
+            <Heart className={`w-5 h-5 ${isSaved ? 'fill-rose-600 text-rose-600' : ''}`} />
+          </button>
+          <button
+            onClick={onClose}
+            className="p-2 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 transition-all"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
 
         {/* Header Section */}
         <div className="flex items-start gap-4 mb-6">
@@ -381,25 +425,31 @@ export const JobDetailModal: React.FC<JobDetailModalProps> = ({ job, onClose, us
               </div>
             )}
 
-            {isExternal && job.external_url ? (
-              <a
-                href={job.external_url}
-                onClick={(e) => {
-                  if (sourceInfo.type === 'telegram' || (job.external_url || '').toLowerCase().includes('t.me')) {
-                    openTelegramLink(e, job.external_url!);
-                  }
-                }}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={`px-6 py-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 w-full sm:w-auto shadow-md transition-all active:scale-95 cursor-pointer ${sourceInfo.buttonClass}`}
-              >
-                {sourceInfo.type === 'telegram' ? (
-                  <Send className="w-4 h-4" />
-                ) : (
-                  <ExternalLink className="w-4 h-4" />
-                )}
-                <span>{sourceInfo.buttonText}</span>
-              </a>
+            {isExternal ? (
+              job.external_url ? (
+                <a
+                  href={job.external_url}
+                  onClick={(e) => {
+                    if (sourceInfo.type === 'telegram' || (job.external_url || '').toLowerCase().includes('t.me')) {
+                      openTelegramLink(e, job.external_url!);
+                    }
+                  }}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`px-6 py-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 w-full sm:w-auto shadow-md transition-all active:scale-95 cursor-pointer ${sourceInfo.buttonClass}`}
+                >
+                  {sourceInfo.type === 'telegram' ? (
+                    <Send className="w-4 h-4" />
+                  ) : (
+                    <ExternalLink className="w-4 h-4" />
+                  )}
+                  <span>{sourceInfo.buttonText}</span>
+                </a>
+              ) : (
+                <div className="px-6 py-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-xs font-bold flex items-center justify-center gap-2 w-full sm:w-auto">
+                  <span>Ссылка на оригинальную вакансию недоступна</span>
+                </div>
+              )
             ) : (
               user?.role === 'employer' ? (
                 <div className="text-xs font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 border border-rose-100 dark:border-rose-900/60 px-4 py-2.5 rounded-xl">

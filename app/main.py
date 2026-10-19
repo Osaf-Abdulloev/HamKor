@@ -1,5 +1,8 @@
 import os
 import asyncio
+import dotenv
+dotenv.load_dotenv()
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -20,6 +23,7 @@ from app.api.v1.ai import router as ai_router
 from app.api.v1.admin import router as admin_router
 from app.api.v1.resumes import router as resumes_router
 from app.api.v1.cv import router as cv_router
+from app.api.v1.telegram import router as telegram_profile_router, webhook_router as telegram_webhook_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -27,7 +31,6 @@ async def lifespan(app: FastAPI):
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
             
-            # Auto-migrate columns for SQLite/PostgreSQL compatibility
             columns_to_add = [
                 ("users", "full_name VARCHAR(255)"),
                 ("users", "is_muted BOOLEAN DEFAULT 0"),
@@ -84,7 +87,19 @@ async def lifespan(app: FastAPI):
                 ("messages", "client_msg_id VARCHAR(100)"),
                 ("users", "telegram_chat_id VARCHAR(100)"),
                 ("users", "telegram_username VARCHAR(100)"),
-                ("users", "telegram_link_code VARCHAR(50)"),
+                ("users", "telegram_user_id VARCHAR(100)"),
+                ("users", "telegram_is_verified BOOLEAN DEFAULT 0"),
+                ("users", "telegram_linked_at DATETIME"),
+                ("users", "telegram_link_code VARCHAR(100)"),
+                ("users", "telegram_link_code_expires_at DATETIME"),
+                ("users", "telegram_notifications_enabled BOOLEAN DEFAULT 1"),
+                ("users", "telegram_last_message_at DATETIME"),
+                ("users", "telegram_last_promotional_message_at DATETIME"),
+                ("user_settings", "telegram_notifications_enabled BOOLEAN DEFAULT 1"),
+                ("user_settings", "telegram_job_recommendations_enabled BOOLEAN DEFAULT 1"),
+                ("user_settings", "telegram_messages_enabled BOOLEAN DEFAULT 1"),
+                ("user_settings", "telegram_system_notifications_enabled BOOLEAN DEFAULT 1"),
+                ("user_settings", "telegram_promotional_enabled BOOLEAN DEFAULT 1"),
                 ("resumes", "source_cv_id CHAR(36)"),
                 ("resumes", "is_default BOOLEAN DEFAULT 0"),
                 ("resumes", "pinned_at DATETIME"),
@@ -107,13 +122,14 @@ async def lifespan(app: FastAPI):
                             pg_col_def = (
                                 col_def.replace("DATETIME", "TIMESTAMP WITH TIME ZONE")
                                 .replace("BOOLEAN DEFAULT 0", "BOOLEAN DEFAULT false")
+                                .replace("BOOLEAN DEFAULT 1", "BOOLEAN DEFAULT true")
                                 .replace("CHAR(36)", "UUID")
                             )
                             await sub_conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {pg_col_def};"))
                 except Exception as col_err:
                     pass
 
-            # If running SQLite and jobs.company_id has legacy NOT NULL constraint, migrate table
+            
             if engine.dialect.name == "sqlite":
                 try:
                     res = await conn.execute(text("PRAGMA table_info(jobs);"))
@@ -164,12 +180,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Startup seed warning: {e}")
 
-
-
-    # NOTE: Hourly sync of yora.tj vacancies, candidates, and Telegram channel jobs
-    # is now handled by Celery Beat periodic tasks (see app/celery/app.py beat_schedule).
-    # To enable periodic sync, run: celery -A app.celery.app.celery_app beat --loglevel=info
-
     yield
 
 app = FastAPI(
@@ -205,6 +215,8 @@ app.include_router(ai_router, prefix=settings.API_V1_STR)
 app.include_router(admin_router, prefix=settings.API_V1_STR)
 app.include_router(resumes_router, prefix=settings.API_V1_STR)
 app.include_router(cv_router, prefix=settings.API_V1_STR)
+app.include_router(telegram_profile_router, prefix=settings.API_V1_STR)
+app.include_router(telegram_webhook_router, prefix=settings.API_V1_STR)
 
 from fastapi import HTTPException
 from fastapi.staticfiles import StaticFiles

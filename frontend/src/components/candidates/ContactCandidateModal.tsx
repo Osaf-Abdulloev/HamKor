@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { X, Mail, MessageSquare, Send, CheckCircle2, AlertCircle, Phone, Lock, ExternalLink, ShieldCheck, UserCheck, RefreshCw } from 'lucide-react';
 import { Candidate } from '../../types';
-import { candidateService, api } from '../../services/api';
+import { candidateService, applicationService, api } from '../../services/api';
 import { chatService } from '../../services/chatService';
 import { useLanguage } from '../../i18n/LanguageContext';
 
 interface ContactCandidateModalProps {
   candidate: Candidate | null;
+  applicationId?: string | null;
+  jobTitle?: string | null;
   onClose: () => void;
   user?: any;
   onOpenAuth?: () => void;
@@ -15,6 +17,8 @@ interface ContactCandidateModalProps {
 
 export const ContactCandidateModal: React.FC<ContactCandidateModalProps> = ({
   candidate,
+  applicationId,
+  jobTitle,
   onClose,
   user,
   onOpenAuth,
@@ -26,7 +30,7 @@ export const ContactCandidateModal: React.FC<ContactCandidateModalProps> = ({
   const isExternal = candidate.is_external || !candidate.user_id;
   const u: any = candidate.user || {};
   const candidateName = candidate.full_name || u.full_name || u.username || 'Соискатель';
-  const position = candidate.desired_position || 'Специалист';
+  const position = jobTitle || candidate.desired_position || 'Специалист';
   const phone = candidate.contact_phone || u.phone || '';
 
   const [activeTab, setActiveTab] = useState<'chat' | 'email'>(isExternal ? 'chat' : 'email');
@@ -38,9 +42,9 @@ export const ContactCandidateModal: React.FC<ContactCandidateModalProps> = ({
   const [chatError, setChatError] = useState<string | null>(null);
 
   // Email state
-  const [subject, setSubject] = useState(`Приглашение на собеседование — ${position}`);
+  const [subject, setSubject] = useState(jobTitle ? `Сообщение по вашему отклику на вакансию «${jobTitle}»` : `Приглашение на собеседование — ${position}`);
   const [emailMessage, setEmailMessage] = useState(
-    `Здравствуйте, ${candidateName}!\n\nПросмотрели ваше резюме на платформе HamKor. Ваш опыт работы и навыки подходят для нашей вакансии "${position}".\n\nПредлагаем обсудить детали и назначить удобное время для собеседования.\n\nС уважением,\nКоманда рекрутинга`
+    `Здравствуйте, ${candidateName}!\n\nПросмотрели ваш отклик на платформе HamKor. Ваш опыт работы и навыки подходят для нашей вакансии "${position}".\n\nПредлагаем обсудить детали и назначить удобное время для собеседования.\n\nС уважением,\nКоманда рекрутинга`
   );
   const [sendingEmail, setSendingEmail] = useState(false);
   const [emailSuccess, setEmailSuccess] = useState<string | null>(null);
@@ -48,8 +52,8 @@ export const ContactCandidateModal: React.FC<ContactCandidateModalProps> = ({
 
   useEffect(() => {
     if (candidate) {
-      setSubject(`Приглашение на собеседование — ${position}`);
-      setEmailMessage(`Здравствуйте, ${candidateName}!\n\nПросмотрели ваше резюме на платформе HamKor. Ваш опыт работы и навыки подходят для нашей вакансии "${position}".\n\nПредлагаем обсудить детали и назначить удобное время для собеседования.\n\nС уважением,\nКоманда рекрутинга`);
+      setSubject(jobTitle ? `Сообщение по вашему отклику на вакансию «${jobTitle}»` : `Приглашение на собеседование — ${position}`);
+      setEmailMessage(`Здравствуйте, ${candidateName}!\n\nПросмотрели ваш отклик на платформе HamKor. Ваш опыт работы и навыки подходят для нашей вакансии "${position}".\n\nПредлагаем обсудить детали и назначить удобное время для собеседования.\n\nС уважением,\nКоманда рекрутинга`);
       setChatMessage(`Здравствуйте, ${candidateName}! Просмотрели ваше резюме на HamKor и хотим пригласить вас на обсуждение вакансии "${position}".`);
       setActiveTab(isExternal ? 'chat' : 'email');
       setEmailSuccess(null);
@@ -57,7 +61,7 @@ export const ContactCandidateModal: React.FC<ContactCandidateModalProps> = ({
       setChatSuccess(null);
       setChatError(null);
     }
-  }, [candidate]);
+  }, [candidate, applicationId, jobTitle]);
 
   const handleStartChat = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -111,16 +115,24 @@ export const ContactCandidateModal: React.FC<ContactCandidateModalProps> = ({
     setEmailSuccess(null);
 
     try {
-      const res = await candidateService.sendCandidateEmail({
-        candidate_user_id: candidate.user_id,
-        subject: subject.trim(),
-        message: emailMessage.trim()
-      });
+      let res: any;
+      if (applicationId) {
+        res = await applicationService.sendApplicationEmail(applicationId, {
+          subject: subject.trim(),
+          message: emailMessage.trim()
+        });
+      } else {
+        res = await candidateService.sendCandidateEmail({
+          candidate_user_id: candidate.user_id,
+          subject: subject.trim(),
+          message: emailMessage.trim()
+        });
+      }
 
-      setEmailSuccess(res.message || 'Сообщение успешно отправлено кандидату!');
+      setEmailSuccess(res.message || 'Сообщение успешно отправлено кандидату на email!');
       setTimeout(() => {
         onClose();
-      }, 2500);
+      }, 2200);
     } catch (err: any) {
       console.error('Error sending email:', err);
       setEmailError(err?.response?.data?.detail || 'Ошибка отправки email');

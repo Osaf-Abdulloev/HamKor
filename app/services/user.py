@@ -1,5 +1,6 @@
 import uuid
 from typing import Optional, List, Tuple
+from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from app.models.domain import User, UserSettings, WorkerProfile, Company, Experience, Certificate, Skill, WorkerSkill
@@ -8,6 +9,8 @@ from app.schemas.profile import WorkerProfileUpdate, CompanyUpdate, ExperienceCr
 from app.repositories.user import UserRepository
 from app.repositories.profile import WorkerProfileRepository, CompanyRepository, SkillRepository
 from app.core.exceptions import NotFoundException, ForbiddenException
+
+from app.utils.storage import save_base64_image, storage_service
 
 class UserService:
     def __init__(self, session: AsyncSession):
@@ -37,7 +40,23 @@ class UserService:
         if update_data.city is not None:
             user.city = update_data.city
         if update_data.avatar_url is not None:
-            user.avatar_url = update_data.avatar_url if update_data.avatar_url != "" else None
+            if update_data.avatar_url in ["", "DELETE", "REMOVE", "NULL"]:
+                user.avatar_url = None
+            else:
+                clean_avatar = update_data.avatar_url
+                if clean_avatar.startswith("data:image/"):
+                    clean_avatar = await save_base64_image(clean_avatar, folder="avatars")
+                user.avatar_url = clean_avatar
+
+            # If user is employer, also sync company.logo_url
+            if str(user.role).lower().endswith("employer"):
+                company = await self.company_repo.get_by_employer_id(user_id)
+                if company:
+                    company.logo_url = user.avatar_url
+                    await self.company_repo.update(company)
+
+        if update_data.language is not None:
+            user.language = update_data.language
 
         await self.user_repo.update(user)
         await self.session.commit()
@@ -146,6 +165,16 @@ class UserService:
 
         await self.worker_repo.update(profile)
         await self.session.commit()
+
+        # Trigger intelligent job match recalculation
+        try:
+            from app.services.match_service import JobMatchService
+            await JobMatchService.recalculate_user_matches(self.session, user_id)
+            from app.celery.tasks import recalculate_user_job_matches_task
+            recalculate_user_job_matches_task.delay(str(user_id))
+        except Exception as err:
+            pass
+
         return await self.get_worker_profile(user_id)
 
     async def add_experience(self, user_id: uuid.UUID, exp_data: ExperienceCreate) -> Experience:
@@ -160,6 +189,15 @@ class UserService:
         )
         self.session.add(exp)
         await self.session.commit()
+
+        try:
+            from app.services.match_service import JobMatchService
+            await JobMatchService.recalculate_user_matches(self.session, user_id)
+            from app.celery.tasks import recalculate_user_job_matches_task
+            recalculate_user_job_matches_task.delay(str(user_id))
+        except Exception:
+            pass
+
         return exp
 
     async def add_certificate(self, user_id: uuid.UUID, cert_data: CertificateCreate) -> Certificate:
@@ -224,30 +262,49 @@ class UserService:
 
     async def get_company_profile(self, employer_id: uuid.UUID) -> Company:
         company = await self.company_repo.get_by_employer_id(employer_id)
+        user = await self.user_repo.get_by_id(employer_id)
         if not company:
-            user = await self.user_repo.get_by_id(employer_id)
             c_name = (user.full_name or user.username or "Компания") if user else "Компания"
             company = Company(
                 employer_id=employer_id,
                 company_name=c_name,
                 contact_email=user.email if user else None,
                 contact_phone=user.phone if user else None,
+                logo_url=user.avatar_url if user else None,
                 is_verified=True
             )
             self.session.add(company)
             await self.session.commit()
+        elif user:
+            # Dual-sync logo_url and avatar_url if one is missing in PostgreSQL
+            if not company.logo_url and user.avatar_url:
+                company.logo_url = user.avatar_url
+                self.session.add(company)
+                await self.session.commit()
+            elif company.logo_url and not user.avatar_url:
+                user.avatar_url = company.logo_url
+                self.session.add(user)
+                await self.session.commit()
+
         return company
 
     async def update_company_profile(self, employer_id: uuid.UUID, data: CompanyUpdate) -> Company:
         company = await self.get_company_profile(employer_id)
         if data.company_name is not None:
             company.company_name = data.company_name
-        if data.inn is not None:
+        if data.inn is not None and not company.inn:
             company.inn = data.inn
         if data.description is not None:
             company.description = data.description
         if data.logo_url is not None:
-            company.logo_url = data.logo_url
+            if data.logo_url in ["", "DELETE", "REMOVE", "NULL"]:
+                company.logo_url = None
+            else:
+                clean_logo = data.logo_url
+                if clean_logo.startswith("data:image/"):
+                    clean_logo = await save_base64_image(clean_logo, folder="logos")
+                company.logo_url = clean_logo
+
         if data.website is not None:
             company.website = data.website
         if data.industry is not None:
@@ -278,13 +335,60 @@ class UserService:
         if user:
             if data.company_name:
                 user.full_name = data.company_name
-            if data.logo_url:
-                user.avatar_url = data.logo_url
+            if data.logo_url is not None:
+                user.avatar_url = company.logo_url
             if data.contact_phone:
                 user.phone = data.contact_phone
             await self.user_repo.update(user)
 
         await self.session.commit()
+        await self.session.refresh(company)
+        return company
+
+    async def update_company_logo(self, employer_id: uuid.UUID, file: UploadFile) -> Company:
+        import time
+        company = await self.get_company_profile(employer_id)
+        old_logo_url = company.logo_url
+
+        prefix = f"company_{employer_id.hex[:8]}"
+        rel_path, _ = await storage_service.save_file(file, folder="logos", prefix=prefix)
+        cache_busting_url = f"/api/v1/files/{rel_path}?v={int(time.time())}"
+
+        company.logo_url = cache_busting_url
+        await self.company_repo.update(company)
+
+        user = await self.user_repo.get_by_id(employer_id)
+        if user:
+            user.avatar_url = cache_busting_url
+            await self.user_repo.update(user)
+
+        await self.session.commit()
+        await self.session.refresh(company)
+
+        # Safely delete old logo file from storage AFTER PostgreSQL transaction succeeds
+        if old_logo_url:
+            await storage_service.delete_file(old_logo_url)
+
+        return company
+
+    async def delete_company_logo(self, employer_id: uuid.UUID) -> Company:
+        company = await self.get_company_profile(employer_id)
+        old_logo_url = company.logo_url
+
+        company.logo_url = None
+        await self.company_repo.update(company)
+
+        user = await self.user_repo.get_by_id(employer_id)
+        if user:
+            user.avatar_url = None
+            await self.user_repo.update(user)
+
+        await self.session.commit()
+        await self.session.refresh(company)
+
+        if old_logo_url:
+            await storage_service.delete_file(old_logo_url)
+
         return company
 
     async def search_workers(

@@ -13,11 +13,24 @@ class ApplicationCreate(BaseModel):
     resume_url: Optional[str] = None
     resume_id: Optional[uuid.UUID] = None
 
+from pydantic import BaseModel, ConfigDict, field_validator
+
 class ApplicationStatusUpdate(BaseModel):
     status: ApplicationStatus
     employer_feedback: Optional[str] = None
     rejection_reason: Optional[str] = None
     rating: Optional[int] = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, v: any) -> ApplicationStatus:
+        if isinstance(v, str):
+            v_clean = v.strip().lower()
+            try:
+                return ApplicationStatus(v_clean)
+            except ValueError:
+                pass
+        return v
 
 class ApplicationCoverNoteUpdate(BaseModel):
     cover_note: str
@@ -63,3 +76,23 @@ class ApplicationOut(BaseModel):
     status_history: List[ApplicationStatusHistoryOut] = []
 
     model_config = ConfigDict(from_attributes=True)
+
+class EmployerContactEmailRequest(BaseModel):
+    subject: str
+    message: str
+
+class EmployerMessageOut(BaseModel):
+    id: uuid.UUID
+    application_id: Optional[uuid.UUID] = None
+    employer_id: uuid.UUID
+    candidate_id: uuid.UUID
+    subject: str
+    body: str
+    recipient_email: str
+    status: str
+    error_message: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+

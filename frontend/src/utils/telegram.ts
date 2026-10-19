@@ -25,30 +25,64 @@ export const getTelegramUrls = (url: string): TelegramUrlInfo => {
     };
   }
 
-  // Match t.me/domain/post_id or telegram.me/domain/post_id or t.me/username
-  const match = cleanUrl.match(/(?:https?:\/\/)?(?:t\.me|telegram\.me)\/([A-Za-z0-9_]+)(?:\/(\d+))?/i);
+  try {
+    const target = cleanUrl.startsWith('http') ? cleanUrl : `https://${cleanUrl}`;
+    const parsed = new URL(target);
+    const host = parsed.hostname.toLowerCase();
+
+    if (host.includes('t.me') || host.includes('telegram.me') || host.includes('tg.me')) {
+      const pathParts = parsed.pathname.split('/').filter(Boolean);
+      if (pathParts.length > 0) {
+        const domain = pathParts[0];
+        const postId = pathParts.length > 1 ? pathParts[1] : undefined;
+        const startParam = parsed.searchParams.get('start');
+
+        if (domain && domain.toLowerCase() !== 's') {
+          let appUrl = `tg://resolve?domain=${domain}`;
+          if (postId) {
+            appUrl += `&post=${postId}`;
+          }
+          if (startParam) {
+            appUrl += `&start=${encodeURIComponent(startParam)}`;
+          }
+
+          const qStr = parsed.search ? parsed.search : (startParam ? `?start=${encodeURIComponent(startParam)}` : '');
+          const mirrorUrl = postId
+            ? `https://telegram.me/${domain}/${postId}${qStr}`
+            : `https://telegram.me/${domain}${qStr}`;
+          const webUrl = postId
+            ? `https://t.me/${domain}/${postId}${qStr}`
+            : `https://t.me/${domain}${qStr}`;
+
+          return { appUrl, webUrl, mirrorUrl };
+        }
+      }
+    }
+  } catch (e) {
+    // URL parse fallback
+  }
+
+  // Regex fallback
+  const match = cleanUrl.match(/(?:https?:\/\/)?(?:t\.me|telegram\.me|tg\.me)\/([A-Za-z0-9_]+)(?:\/(\d+))?/i);
   if (match) {
     const domain = match[1];
     const postId = match[2];
+    const startMatch = cleanUrl.match(/[?&]start=([A-Za-z0-9_-]+)/i);
+    const startParam = startMatch ? startMatch[1] : undefined;
 
     if (domain && domain.toLowerCase() !== 's') {
-      const appUrl = postId
-        ? `tg://resolve?domain=${domain}&post=${postId}`
-        : `tg://resolve?domain=${domain}`;
+      let appUrl = `tg://resolve?domain=${domain}`;
+      if (postId) appUrl += `&post=${postId}`;
+      if (startParam) appUrl += `&start=${encodeURIComponent(startParam)}`;
 
-      const mirrorUrl = postId
-        ? `https://telegram.me/${domain}/${postId}`
-        : `https://telegram.me/${domain}`;
-
-      const webUrl = postId
-        ? `https://t.me/${domain}/${postId}`
-        : `https://t.me/${domain}`;
+      const startQuery = startParam ? `?start=${encodeURIComponent(startParam)}` : '';
+      const mirrorUrl = postId ? `https://telegram.me/${domain}/${postId}${startQuery}` : `https://telegram.me/${domain}${startQuery}`;
+      const webUrl = postId ? `https://t.me/${domain}/${postId}${startQuery}` : `https://t.me/${domain}${startQuery}`;
 
       return { appUrl, webUrl, mirrorUrl };
     }
   }
 
-  // Generic link
   return {
     appUrl: `tg://msg_url?url=${encodeURIComponent(cleanUrl)}`,
     webUrl: cleanUrl,
@@ -57,8 +91,9 @@ export const getTelegramUrls = (url: string): TelegramUrlInfo => {
 };
 
 /**
- * Safely opens Telegram link via native app protocol first,
- * with graceful fallback to web mirror if app doesn't open.
+ * Safely opens Telegram link via native app protocol first (tg://),
+ * bypassing browser DNS blocks on t.me domain.
+ * Graceful fallback to telegram.me mirror in a new tab.
  */
 export const openTelegramLink = (e: React.MouseEvent | null, url: string) => {
   if (e) {
@@ -69,12 +104,12 @@ export const openTelegramLink = (e: React.MouseEvent | null, url: string) => {
   const { appUrl, mirrorUrl, webUrl } = getTelegramUrls(url);
 
   if (appUrl) {
-    // Trigger native Telegram app directly (bypasses DNS block on t.me)
+    // 1. Launch native Telegram Desktop/Mobile client app via tg:// protocol
     window.location.href = appUrl;
   }
 
-  // Fallback to mirror URL in new tab if desktop app is not installed
+  // 2. Open telegram.me web mirror in a new tab after a brief delay
   setTimeout(() => {
     window.open(mirrorUrl || webUrl, '_blank', 'noopener,noreferrer');
-  }, 600);
+  }, 400);
 };

@@ -48,7 +48,12 @@ def ensure_postgresql_database(url: str) -> bool:
 def get_effective_db_url() -> str:
     db_url = settings.DATABASE_URL
     if db_url.startswith("postgresql"):
-        ensure_postgresql_database(db_url)
+        pg_ok = ensure_postgresql_database(db_url)
+        if not pg_ok:
+            import os
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            sqlite_path = os.path.join(base_dir, "ergon.db")
+            return f"sqlite+aiosqlite:///{sqlite_path}"
         return db_url
     return db_url
 

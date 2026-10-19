@@ -17,10 +17,55 @@ interface ResumeEditorPageProps {
   user?: any;
 }
 
+const sanitizeContent = (raw: any): ResumeContent => {
+  const c = typeof raw === 'object' && raw !== null ? raw : {};
+  const p = typeof c.personal_info === 'object' && c.personal_info !== null ? c.personal_info : {};
+  const s = typeof c.skills === 'object' && c.skills !== null ? c.skills : {};
+
+  return {
+    personal_info: {
+      full_name: p.full_name || '',
+      desired_position: p.desired_position || '',
+      email: p.email || '',
+      phone: p.phone || '',
+      city: p.city || '',
+      photo_url: p.photo_url || '',
+      summary: p.summary || ''
+    },
+    work_experience: Array.isArray(c.work_experience) ? c.work_experience.map((item: any) => ({
+      id: item.id || `exp-${Date.now()}-${Math.random()}`,
+      company_name: item.company_name || '',
+      position: item.position || '',
+      start_date: item.start_date || '',
+      end_date: item.end_date || '',
+      is_current: Boolean(item.is_current),
+      responsibilities: Array.isArray(item.responsibilities) ? item.responsibilities : [],
+      achievements: Array.isArray(item.achievements) ? item.achievements : []
+    })) : [],
+    education: Array.isArray(c.education) ? c.education.map((item: any) => ({
+      id: item.id || `edu-${Date.now()}-${Math.random()}`,
+      institution: item.institution || '',
+      degree: item.degree || '',
+      field_of_study: item.field_of_study || '',
+      start_year: item.start_year || '',
+      end_year: item.end_year || ''
+    })) : [],
+    skills: {
+      technical: Array.isArray(s.technical) ? s.technical : (Array.isArray(s) ? s : []),
+      soft: Array.isArray(s.soft) ? s.soft : []
+    },
+    languages: Array.isArray(c.languages) ? c.languages : [],
+    certificates: Array.isArray(c.certificates) ? c.certificates : [],
+    projects: Array.isArray(c.projects) ? c.projects : [],
+    social_links: typeof c.social_links === 'object' && c.social_links !== null ? c.social_links : {},
+    custom_sections: Array.isArray(c.custom_sections) ? c.custom_sections : []
+  };
+};
+
 export const ResumeEditorPage: React.FC<ResumeEditorPageProps> = ({ resumeId, initialResume, onBack, user }) => {
   const { t } = useLanguage();
   const [resume, setResume] = useState<Resume | null>(initialResume || null);
-  const [content, setContent] = useState<ResumeContent | null>(initialResume?.content || null);
+  const [content, setContent] = useState<ResumeContent | null>(initialResume?.content ? sanitizeContent(initialResume.content) : null);
   const [title, setTitle] = useState(initialResume?.title || '');
   const [targetPosition, setTargetPosition] = useState(initialResume?.target_position || initialResume?.content?.personal_info?.desired_position || '');
 
@@ -50,10 +95,12 @@ export const ResumeEditorPage: React.FC<ResumeEditorPageProps> = ({ resumeId, in
     resumeService.getResumeById(resumeId).then((res) => {
       if (res) {
         setResume(res);
-        setContent(res.content);
+        setContent(sanitizeContent(res.content));
         setTitle(res.title || 'Моё резюме');
         setTargetPosition(res.target_position || res.content?.personal_info?.desired_position || '');
       }
+    }).catch((err) => {
+      console.error('Error loading resume by id:', err);
     }).finally(() => {
       setIsLoading(false);
     });

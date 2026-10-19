@@ -11,7 +11,6 @@ class ConnectionManager:
         await websocket.accept()
         if user_id not in self.active_connections:
             self.active_connections[user_id] = set()
-            # Broadcast presence online if user was offline
             await self.broadcast_presence(user_id, is_online=True)
         self.active_connections[user_id].add(websocket)
 
@@ -20,7 +19,7 @@ class ConnectionManager:
             self.active_connections[user_id].discard(websocket)
             if not self.active_connections[user_id]:
                 del self.active_connections[user_id]
-                # Broadcast presence offline
+
                 import asyncio
                 asyncio.create_task(self.broadcast_presence(user_id, is_online=False))
 

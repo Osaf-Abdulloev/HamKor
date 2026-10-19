@@ -34,25 +34,30 @@ async def ai_chat(
         context["user_profile"] = req.user_profile
 
     prompt_text = req.prompt or getattr(req, 'message', '') or ''
-    history_list = req.history or req.messages or []
-    
-    # Process AI Query
-    result_text = await service.process_user_query(
-        prompt_text, 
-        context=context,
-        history=[{"role": h.role, "content": h.content} for h in history_list]
-    )
 
-    # PERMANENT POSTGRES PERSISTENCE FOR AI SESSIONS & MESSAGES
+    # 1. Resolve AIChatSession
     session_obj = None
-    if current_user:
-        # Find active session or create new
-        stmt = select(AIChatSession).where(AIChatSession.user_id == current_user.id).order_by(AIChatSession.updated_at.desc())
+    if req.session_id:
+        try:
+            sid = uuid.UUID(req.session_id)
+            stmt = select(AIChatSession).options(selectinload(AIChatSession.messages)).where(AIChatSession.id == sid)
+            res = await db.execute(stmt)
+            session_obj = res.scalar_one_or_none()
+        except Exception:
+            session_obj = None
+
+    if not session_obj and current_user:
+        stmt = (
+            select(AIChatSession)
+            .options(selectinload(AIChatSession.messages))
+            .where(AIChatSession.user_id == current_user.id)
+            .order_by(AIChatSession.updated_at.desc())
+        )
         res = await db.execute(stmt)
         session_obj = res.scalars().first()
 
     if not session_obj:
-        session_title = prompt_text[:40] if prompt_text else "Разговор с ИИ"
+        session_title = prompt_text[:40] if prompt_text else "Новый диалог"
         session_obj = AIChatSession(
             user_id=current_user.id if current_user else None,
             title=session_title
@@ -60,6 +65,25 @@ async def ai_chat(
         db.add(session_obj)
         await db.flush()
 
+    # 2. Build history from PostgreSQL session messages if not provided by request
+    history_payload = []
+    if req.history or req.messages:
+        raw_list = req.history or req.messages or []
+        history_payload = [{"role": h.role, "content": h.content} for h in raw_list]
+    elif session_obj and session_obj.id:
+        stmt_msg = select(AIMessage).where(AIMessage.session_id == session_obj.id).order_by(AIMessage.created_at.desc()).limit(10)
+        res_msg = await db.execute(stmt_msg)
+        recent_msgs = list(reversed(res_msg.scalars().all()))
+        history_payload = [{"role": m.role, "content": m.content} for m in recent_msgs]
+
+    # 3. Process query via real AI service
+    result_text = await service.process_user_query(
+        prompt_text, 
+        context=context,
+        history=history_payload
+    )
+
+    # 4. Save messages to PostgreSQL
     if prompt_text:
         msg_user = AIMessage(
             session_id=session_obj.id,
@@ -74,9 +98,50 @@ async def ai_chat(
         content=result_text
     )
     db.add(msg_ai)
+
+    # Update session title if default
+    if session_obj.title == "Новый диалог" and prompt_text:
+        session_obj.title = prompt_text[:35]
+
     await db.commit()
 
-    return AIResponse(result=result_text, session_id=str(session_obj.id) if session_obj else None)
+    return AIResponse(result=result_text, session_id=str(session_obj.id))
+
+@router.post("/sessions")
+async def create_new_ai_session(
+    title: Optional[str] = "Новый диалог",
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    session_obj = AIChatSession(
+        user_id=current_user.id,
+        title=title or "Новый диалог"
+    )
+    db.add(session_obj)
+    await db.commit()
+    await db.refresh(session_obj)
+    return {
+        "id": str(session_obj.id),
+        "title": session_obj.title,
+        "created_at": session_obj.created_at,
+        "messages_count": 0
+    }
+
+@router.delete("/sessions/{session_id}")
+async def delete_ai_session(
+    session_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = select(AIChatSession).where(AIChatSession.id == session_id, AIChatSession.user_id == current_user.id)
+    res = await db.execute(stmt)
+    session_obj = res.scalar_one_or_none()
+    if not session_obj:
+        raise HTTPException(status_code=404, detail="AI Session not found")
+
+    await db.delete(session_obj)
+    await db.commit()
+    return MessageResponse(message="AI Session deleted successfully")
 
 @router.get("/sessions")
 async def get_my_ai_sessions(

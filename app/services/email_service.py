@@ -359,3 +359,127 @@ class EmailService:
 
         return EmailService._send_smtp_message(msg, to_email)
 
+    @staticmethod
+    def send_employer_direct_email(
+        to_email: str,
+        candidate_name: str,
+        employer_name: str,
+        company_name: str,
+        job_title: str,
+        subject: str,
+        message_body: str,
+        lang: str = "ru"
+    ) -> bool:
+        """Send rich HTML email message directly from an employer to an applicant candidate."""
+        frontend_url = getattr(settings, "FRONTEND_URL", "https://hamkor.online").rstrip("/")
+        app_url = f"{frontend_url}/#applications"
+
+        title_header = {
+            "ru": f"Сообщение от компании «{company_name}»",
+            "en": f"Message from {company_name}",
+            "tj": f"Паём аз ширкати «{company_name}»"
+        }.get(lang, f"Сообщение от компании «{company_name}»")
+
+        intro_text = {
+            "ru": f"Здравствуйте, {candidate_name}!<br/><br/>Компания <strong>«{company_name}»</strong> направила вам письмо по вашему отклику на вакансию <strong>«{job_title}»</strong>:",
+            "en": f"Hello {candidate_name}!<br/><br/>Company <strong>«{company_name}»</strong> sent you a message regarding your application for <strong>«{job_title}»</strong>:",
+            "tj": f"Салом, {candidate_name}!<br/><br/>Ширкати <strong>«{company_name}»</strong> ба шумо оид ба дархостатон ба вакансияи <strong>«{job_title}»</strong> паём фиристод:"
+        }.get(lang, f"Здравствуйте, {candidate_name}!<br/><br/>Компания <strong>«{company_name}»</strong> направила вам письмо по вашему отклику на вакансию <strong>«{job_title}»</strong>:")
+
+        cta_button = {
+            "ru": "💬 Открыть в HamKor",
+            "en": "💬 Open in HamKor",
+            "tj": "💬 Боз кардан дар HamKor"
+        }.get(lang, "💬 Открыть в HamKor")
+
+        footer_text = {
+            "ru": "Вы можете ответить работодателю через внутренний чат на платформе HamKor.",
+            "en": "You can reply to the employer using the internal chat on HamKor.",
+            "tj": "Шумо метавонед ба корфармо тавассути чати дохилии HamKor ҷавоб диҳед."
+        }.get(lang, "Вы можете ответить работодателю через внутренний чат на платформе HamKor.")
+
+        plain_text = f"""
+Здравствуйте, {candidate_name}!
+
+Компания «{company_name}» направила вам сообщение по отклику на вакансию «{job_title}»:
+
+--------------------------------------------------
+{message_body}
+--------------------------------------------------
+
+Вакансия: {job_title}
+Компания: {company_name}
+Работодатель: {employer_name}
+
+Открыть в HamKor: {app_url}
+
+С уважением,
+Команда HamKor.tj
+"""
+
+        # Escape message body for safe HTML display
+        safe_message = message_body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br/>")
+
+        html_body = f"""
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #0f172a; background-color: #f8fafc; margin: 0; padding: 20px;">
+  <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 20px; border: 1px solid #e2e8f0; padding: 28px; box-shadow: 0 10px 25px rgba(0,0,0,0.05);">
+    
+    <!-- Header Banner -->
+    <div style="background: linear-gradient(135deg, #4f46e5, #7c3aed); padding: 22px; border-radius: 16px; text-align: center; color: #ffffff; margin-bottom: 24px;">
+      <h2 style="margin: 0; font-size: 22px; font-weight: 800;">{title_header}</h2>
+      <p style="margin: 6px 0 0 0; font-size: 13px; opacity: 0.95;">HamKor.tj — Платформа найма в Таджикистане</p>
+    </div>
+
+    <!-- Main Content Body -->
+    <div style="padding: 8px 0; font-size: 14px; line-height: 1.65; color: #334155;">
+      <p style="margin-top: 0;">{intro_text}</p>
+      
+      <!-- Message Card -->
+      <div style="background-color: #f1f5f9; border-left: 5px solid #6366f1; padding: 18px; border-radius: 12px; margin: 20px 0; font-size: 14px; color: #0f172a; line-height: 1.6;">
+        {safe_message}
+      </div>
+      
+      <!-- Job & Company Meta Card -->
+      <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px 18px; margin-bottom: 24px;">
+        <p style="margin: 0 0 6px 0; font-size: 12px; color: #64748b; font-weight: 700; uppercase tracking-wider;">ИНФОРМАЦИЯ О ВАКАНСИИ</p>
+        <p style="margin: 0 0 4px 0; font-size: 13px; font-weight: 800; color: #1e293b;">💼 Vacancy: <span style="color: #4f46e5;">{job_title}</span></p>
+        <p style="margin: 0; font-size: 13px; font-weight: 800; color: #1e293b;">🏢 Company: <span style="color: #0f172a;">{company_name}</span> ({employer_name})</p>
+      </div>
+
+      <!-- Action Button -->
+      <div style="text-align: center; margin: 28px 0 20px 0;">
+        <a href="{app_url}" style="display: inline-block; background-color: #4f46e5; color: #ffffff; text-decoration: none; padding: 14px 36px; border-radius: 14px; font-weight: 800; font-size: 15px; box-shadow: 0 4px 14px rgba(79, 70, 229, 0.35);">
+          {cta_button}
+        </a>
+      </div>
+
+      <p style="font-size: 12px; color: #64748b; text-align: center; margin-top: 16px;">
+        {footer_text}
+      </p>
+    </div>
+
+    <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0 16px 0;" />
+    <p style="font-size: 11px; color: #94a3b8; text-align: center; margin: 0;">
+      © 2026 HamKor Job Search Platform. Все права защищены.
+    </p>
+  </div>
+</body>
+</html>
+"""
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"{company_name} (via HamKor) <{settings.get_email_from}>"
+        msg["To"] = to_email
+        msg.attach(MIMEText(plain_text, "plain", "utf-8"))
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+        return EmailService._send_smtp_message(msg, to_email)
+
+
